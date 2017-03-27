@@ -1,0 +1,46 @@
+#!/bin/bash
+
+# -------------------------------------------------------------------------- #
+# Copyright 2002-2017, OpenNebula Project, OpenNebula Systems                #
+#                                                                            #
+# Licensed under the Apache License, Version 2.0 (the "License"); you may    #
+# not use this file except in compliance with the License. You may obtain    #
+# a copy of the License at                                                   #
+#                                                                            #
+# http://www.apache.org/licenses/LICENSE-2.0                                 #
+#                                                                            #
+# Unless required by applicable law or agreed to in writing, software        #
+# distributed under the License is distributed on an "AS IS" BASIS,          #
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.   #
+# See the License for the specific language governing permissions and        #
+# limitations under the License.                                             #
+#--------------------------------------------------------------------------- #
+
+source $(dirname $0)/kvmrc
+source $(dirname $0)/../../scripts_common.sh
+
+domain=$1
+
+mkdir -p `dirname $domain`
+cat > $domain
+
+DISKS=($(xmlstarlet sel -t -v "/domain/devices/disk/source/@file" $domain))
+for SOURCE_FILE in ${DISKS[@]}; do
+    # Move original
+    if [ ! -L "$SOURCE_FILE" ]; then
+        mv "$SOURCE_FILE" "$SOURCE_FILE.orig"
+        ln -s "$(basename $SOURCE_FILE.orig)" "$SOURCE_FILE"
+    fi
+    # Fix disks format
+    FORMAT="$(qemu-img info "$SOURCE_FILE" | awk -F ': ' '/file format/ {print $2}')"
+    xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$SOURCE_FILE']/driver/@type" --value "$FORMAT" $domain
+done
+
+data=`virsh --connect $LIBVIRT_URI create $domain`
+
+if [ "x$?" = "x0" ]; then
+    echo $data | sed 's/Domain //' | sed 's/ created from .*$//'
+else
+    error_message "Could not create domain from $domain"
+    exit -1
+fi
