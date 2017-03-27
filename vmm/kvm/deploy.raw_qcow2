@@ -25,15 +25,28 @@ mkdir -p `dirname $domain`
 cat > $domain
 
 DISKS=($(xmlstarlet sel -t -v "/domain/devices/disk/source/@file" $domain))
-for SOURCE_FILE in ${DISKS[@]}; do
+
+for DISK_PATH in ${DISKS[@]}; do
+    DISK_DIR="$(dirname "$DISK_PATH")"
+    DISK_NAME="$(basename "$DISK_PATH")"
+    DISK_ORIG_PATH="${DISK_PATH}.orig"
+    DISK_ORIG_NAME="${DISK_NAME}.orig"
+
     # Move original
-    if [ ! -L "$SOURCE_FILE" ]; then
-        mv "$SOURCE_FILE" "$SOURCE_FILE.orig"
-        ln -s "$(basename $SOURCE_FILE.orig)" "$SOURCE_FILE"
+    if [ ! -L "$DISK_PATH" ]; then
+        mv "$DISK_PATH" "$DISK_ORIG_PATH"
+        ln -s "$DISK_ORIG_NAME" "$DISK_PATH"
     fi
+
+    DISK_TARGET_NAME="$(readlink -f "$DISK_PATH" | awk -F "${DISK_NAME}" '{print "'${DISK_NAME}'"$NF}')"
+    DISK_TARGET_PATH="${DISK_DIR}/${DISK_TARGET_NAME}"
+
     # Fix disks format
-    FORMAT="$(qemu-img info "$SOURCE_FILE" | awk -F ': ' '/file format/ {print $2}')"
-    xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$SOURCE_FILE']/driver/@type" --value "$FORMAT" $domain
+    DISK_TARGET_FORMAT="$(qemu-img info "$DISK_TARGET_PATH" | awk -F ': ' '/file format/ {print $2}')"
+    xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_PATH']/driver/@type" --value "$DISK_TARGET_FORMAT" $domain
+
+    # Fix disk path
+    xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_PATH']/source/@file" --value "$DISK_TARGET_PATH" $domain
 done
 
 data=`virsh --connect $LIBVIRT_URI create $domain`
