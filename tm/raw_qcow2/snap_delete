@@ -62,18 +62,27 @@ CLONE="${XPATH_ELEMENTS[j++]}"
 SYSTEM_DS_PATH=$(dirname ${SRC_PATH})
 IMAGE_DS_PATH=$(dirname ${DISK_SRC})
 
+SYSTEM_DS_DISK_PATH_SHORT="disk.${DISK_ID}"
+SYSTEM_DS_DISK_PATH="${SYSTEM_DS_PATH}/${SYSTEM_DS_DISK_PATH_SHORT}"
+
 SNAP_DIR_SHORT="disk.${DISK_ID}.snap"
 SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${SNAP_ID}"
 
 CMD=$(cat <<EOT
 set -ex -o pipefail
 
-SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk/source/@file" | grep "$SNAP_PATH_SHORT\$")
+SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
 SNAP_BASE=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*[source/@file='\${SNAP_PATH}']/backingStore/source/@file")
+SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
 
-virsh blockcommit $DOMAIN --path \${SNAP_PATH} --base \${SNAP_BASE} --active --wait --pivot
+virsh blockcommit $DOMAIN --path "\${SNAP_PATH}" --base "\${SNAP_BASE}" --active --wait --pivot \${DISK_TARGET}
 
-rm -f \${SNAP_PATH}
+if [ "\$?" == "0" ]; then
+    rm -f \${SNAP_PATH}
+    ln -sf \${SNAP_BASE_SHORT} ${SYSTEM_DS_DISK_PATH}
+else
+    exit 1
+fi
 
 EOT
 )
