@@ -42,7 +42,7 @@ for DISK_PATH in ${DISKS[@]}; do
     DISK_TARGET_PATH="${DISK_DIR}/${DISK_TARGET_NAME}"
 
     # Fix disks format
-    DISK_TARGET_FORMAT="$(qemu-img info "$DISK_TARGET_PATH" | awk -F ': ' '/file format/ {print $2}')"
+    DISK_TARGET_FORMAT="$(qemu-img info "$DISK_TARGET_PATH" | awk -F ': ' '/^file format/ {print $2}')"
     xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_PATH']/driver/@type" --value "$DISK_TARGET_FORMAT" $domain
 
     # Fix disk path
