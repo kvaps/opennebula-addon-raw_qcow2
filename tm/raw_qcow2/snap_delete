@@ -53,11 +53,14 @@ while IFS= read -r -d '' element; do
     XPATH_ELEMENTS[i++]="$element"
 done < <(onevm show -x $VMID| $XPATH \
                     /VM/TEMPLATE/DISK[DISK_ID=$DISK_ID]/SOURCE \
-                    /VM/TEMPLATE/DISK[DISK_ID=$DISK_ID]/CLONE)
+                    /VM/TEMPLATE/DISK[DISK_ID=$DISK_ID]/CLONE \
+                    /VM/STATE)
+
+SNAP_LIST=($(onevm show -x $VMID | sed -n  '/^ *<SNAPSHOT> *$/,/^ *<\/SNAPSHOT>/p' | grep -o '<ID>.*</ID>' | while read line; do echo $line | $XPATH /ID ; done))
 
 DISK_SRC="${XPATH_ELEMENTS[j++]}"
 CLONE="${XPATH_ELEMENTS[j++]}"
-
+STATE="${XPATH_ELEMENTS[j++]}"
 
 SYSTEM_DS_PATH=$(dirname ${SRC_PATH})
 IMAGE_DS_PATH=$(dirname ${DISK_SRC})
@@ -67,37 +70,83 @@ SYSTEM_DS_DISK_PATH="${SYSTEM_DS_PATH}/${SYSTEM_DS_DISK_PATH_SHORT}"
 
 NEXT_SNAP_ID=$(($SNAP_ID+1))
 
+SNAP_DIR="${DISK_PATH}.snap"
 SNAP_DIR_SHORT="disk.${DISK_ID}.snap"
-SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
 
-CMD=$(cat <<EOT
+SNAP_PATH="${SNAP_DIR}/${SNAP_ID}"
+SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${SNAP_ID}"
+
+NEXT_SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
+NEXT_SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
+
+#-------------------------------------------------------------------------------
+# Online mode
+#-------------------------------------------------------------------------------
+
+ONLINE_CMD=$(cat <<EOT
 set -ex -o pipefail
 
-SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
-SNAP_BASE=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*[source/@file='\${SNAP_PATH}']/backingStore/source/@file")
-SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
-
-if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
-    virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --active --wait --pivot
-else                                                                                      
-    virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --wait
-fi
-
-if [ "\$?" != "0" ]; then
-    exit 1
-fi
-
-virsh dumpxml $DOMAIN > /tmp/test
-NEW_DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_BASE}']/source/@file")
-NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-
-rm -f \${SNAP_PATH}
-ln -sf \${NEW_DISK_PATH_SHORT} ${SYSTEM_DS_DISK_PATH}
+    SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
+    NEXT_SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$NEXT_SNAP_PATH_SHORT\$")
+    DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
+    
+    NEXT_SNAP_BASE=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*[source/@file='\${NEXT_SNAP_PATH}']/backingStore/source/@file")
+    NEXT_SNAP_BASE_SHORT=\$(echo \$NEXT_SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
+    
+    if ! [[ "${SNAP_LIST[@]} " =~ " ${NEXT_SNAP_ID} " ]]; then
+    
+        if [ "\$NEXT_SNAP_PATH" == "\$DISK_PATH" ]; then
+            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${NEXT_SNAP_PATH}" --base "\${NEXT_SNAP_BASE}" --active --wait --pivot
+        else
+            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${NEXT_SNAP_PATH}" --base "\${NEXT_SNAP_BASE}" --wait
+        fi
+    
+        if [ "\$?" == "0" ]; then
+            NEW_DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${NEXT_SNAP_BASE}']/source/@file")
+            NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
+            rm -f \${NEXT_SNAP_PATH}
+            ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
+        fi
+    
+    fi
 
 EOT
 )
 
-ssh_exec_and_log "${SRC_HOST}" "${CMD}" \
-                 "Error deleting snapshot ${SNAP_PATH}"
+#-------------------------------------------------------------------------------
+# Offline mode
+#-------------------------------------------------------------------------------
+
+OFFLINE_CMD=$(cat <<EOT
+set -ex -o pipefail
+
+PREVIOUS_SNAP="${SYSTEM_DS_PATH}/\$(readlink $SYSTEM_DS_DISK_PATH)"
+if [ ! -f "\$PREVIOUS_SNAP" ]; then
+    PREVIOUS_SNAP=\$(readlink -f $SYSTEM_DS_DISK_PATH)
+fi
+
+cd "${SNAP_DIR}"
+qemu-img commit "${SNAP_PATH}" 
+
+EOT
+)
+
+#-------------------------------------------------------------------------------
+
+
+if ! [[ $STATE -gt 0 ]]; then
+   log "Error deleting snapshot: Wrong STATE! $STATE"
+   exit 1
+fi
+
+echo "STATE=$STATE" >> /tmp/123
+
+if [[ $STATE -eq 3 ]]; then
+    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_CMD}" \
+                     "Error deleting snapshot ${SNAP_PATH}"
+else
+    ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_CMD}" \
+                     "Error deleting snapshot ${SNAP_PATH}"
+fi
+
 
