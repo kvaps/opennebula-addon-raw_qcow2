@@ -85,8 +85,6 @@ SNAP_DIR_SHORT="${DISK_PATH_SHORT}.snap"
 SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
 SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
 
-PREVIOUS_SNAP="$(basename $(readlink ${SYSTEM_DS_DISK_PATH}))"
-
 CMD=$(cat <<EOT
 set -ex -o pipefail
 
@@ -109,7 +107,4 @@ EOT
 )
 
 ssh_exec_and_log "${SRC_HOST}" "${CMD}" \
-                 "Error creating snapshot ${SNAP_PATH}" &&
-
-# Run out of host, to avoid i/o error
-qemu-img rebase -u -b "${PREVIOUS_SNAP}" "${SNAP_PATH}"
+                 "Error creating snapshot ${SNAP_PATH}"
