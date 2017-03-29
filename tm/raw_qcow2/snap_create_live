@@ -77,11 +77,15 @@ else
     DISK_PATH_SHORT=$DISK_PATH
 fi
 
+NEXT_SNAP_ID=$(($SNAP_ID+1))
+
 SNAP_DIR="${DISK_PATH}.snap"
 SNAP_DIR_SHORT="${DISK_PATH_SHORT}.snap"
 
-SNAP_PATH="${SNAP_DIR}/${SNAP_ID}"
-SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${SNAP_ID}"
+SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
+SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
+
+PREVIOUS_SNAP="$(basename $(readlink ${SYSTEM_DS_DISK_PATH}))"
 
 CMD=$(cat <<EOT
 set -ex -o pipefail
@@ -90,7 +94,7 @@ mkdir -p "${SNAP_DIR}"
 
 # The file must be created beforehand or libvirt complains with
 # "permission denied"
-touch $SNAP_PATH
+touch "$SNAP_PATH"
 
 if virsh -c $LIBVIRT_URI domfsfreeze $DEPLOY_ID ; then
     trap "virsh -c $LIBVIRT_URI domfsthaw $DEPLOY_ID" EXIT TERM INT HUP
@@ -98,12 +102,14 @@ fi
 
 virsh snapshot-create-as --domain "$DEPLOY_ID" "${DISK_ID}-${SNAP_ID}" \
     --diskspec "$TARGET",file="$SNAP_PATH" \
-    --disk-only --atomic 
+    --disk-only --atomic --no-metadata
 
-ln -sf $SNAP_PATH_SHORT $SYSTEM_DS_DISK_PATH
-
+ln -sf "$SNAP_PATH_SHORT" "$SYSTEM_DS_DISK_PATH"
 EOT
 )
 
 ssh_exec_and_log "${SRC_HOST}" "${CMD}" \
-                 "Error creating snapshot ${SNAP_PATH}"
+                 "Error creating snapshot ${SNAP_PATH}" &&
+
+# Run out of host, to avoid i/o error
+qemu-img rebase -u -b "${PREVIOUS_SNAP}" "${SNAP_PATH}"
