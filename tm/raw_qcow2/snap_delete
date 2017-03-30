@@ -98,79 +98,111 @@ done < <(onevm show -x $VMID | tr '\n' ' ' | grep -Po "<SNAPSHOT>.*?</SNAPSHOT>"
 
 LAST_SNAP="${SNAP_LIST[-1]}"
 NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
-SNAP_CHECK_LIST=( $(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '%f\n' ))
-SNAP_ACTIVE="$(basename $(readlink -f $DISK_PATH))"
+FS_SNAP_LIST=( $(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '%f\n' ))
+ACTIVE_SNAP_ID="$(basename $(readlink -f $DISK_PATH))"
 
 
-for ID in ${SNAP_CHECK_LIST[@]}; do
+for ID in ${FS_SNAP_LIST[@]}; do
     eval SNAP${ID}_PATH="${SNAP_DIR}/${ID}"
     eval SNAP${ID}_PATH_SHORT="${SNAP_DIR_SHORT}/${ID}"
 
     eval SNAP${ID}_PARENT_PATH='$(qemu-img info ${SNAP'${ID}'_PATH} | awk -F '\'': '\'' '\''/^backing file:/ {print $2}'\'')'
     eval SNAP${ID}_PARENT_PATH_SHORT='$(echo ${SNAP'${ID}'_PARENT_PATH_SHORT} | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '\''{print "${SYSTEM_DS_DISK_PATH_SHORT}" $NF}'\'')'
     
-    # If no parent information get it from image file
+    # Get snapshot parent from image file
     eval SNAP${ID}_PARENT='${SNAP'${ID}'_PARENT:-$(basename $SNAP'${ID}'_PARENT_PATH)}'
 
-    # Set childrens for parent snapshot
+    # Get snapshot childrens from image file
     eval PARENT="\${SNAP${ID}_PARENT}"
     eval SNAP${PARENT}_CHILDREN+=\" ${ID}\"
-    echo SNAP${PARENT}_CHILDREN+=\" ${ID}\" >> /tmp/123
 done
 
-SNAP_COMMIT_LIST=($(
-    unset ID PARENT PARENT_CHILDREN CHILDREN SNAP_PATH
-    for ID in ${SNAP_CHECK_LIST[@]}; do
-        eval PARENT="\${SNAP${ID}_PARENT}"
-        eval PARENT_PARENT=("\${SNAP${PARENT}_PARENT}")
-        eval PARENT_CHILDREN=("\${SNAP${PARENT}_CHILDREN}")
-        eval SNAP_PATH="\$SNAP${ID}_PATH"
-        eval CHILDREN="\$SNAP${ID}_CHILDREN"
+#-------------------------------------------------------------------------------
+# Creating lists
+#-------------------------------------------------------------------------------
 
-        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&		# if snapshot is not exist in opennebula
-            [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&		# if parent snapshot is not exist in opennebula
-            ( [[ ! -z "${CHILDREN}" ]] ||				# if snapshot have childrens (not last in the chain, or
-            [[ "${PARENT}" == "0" ]] ||                                 # parent snapshot is base or
-            [[ "${PARENT_PARENT}" == "0" ]] ) &&                        # parent parent snapshot is base
-            [[ "${PARENT_CHILDREN[@]}" == "${ID}" ]] 	    		# if parent snapshot have no other childrens
-        then
-            echo "${ID}"
+
+for ID in ${FS_SNAP_LIST[@]}; do
+
+    echo >> /tmp/123
+    echo ID=${ID} >> /tmp/123
+    eval echo PARENT_SNAP_ID="\${SNAP${ID}_PARENT}" >> /tmp/123
+    eval echo CHILDREN_SNAP_LIST="\${SNAP${ID}_CHILDREN}" >> /tmp/123
+    echo CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP[@]}" >> /tmp/123
+
+    # get parameters
+
+    eval PARENT_SNAP_ID="\${SNAP${ID}_PARENT}"
+    eval CHILDREN_SNAP_LIST=("\${SNAP${ID}_CHILDREN}")
+    CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP[@]}"
+    
+    # if children_snaps_number > 1
+
+    if [[ "$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then
+
+        for CHILDREN_SNAP_ID in ${CHILDREN_SNAP_LIST[@]}; do
+            eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
+
+            # if children_snap have no childrens, and
+            # if children_snap is not in the new_snap_list, and
+            # if children_snap is not active_snap
+
+            if [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] && [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] && [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]; then
+
+                # add snapshot to delete
+                SNAP_DELETE_LIST+=" ${CHILDREN_SNAP_ID}"
+            fi
+
+        done
+
+    else
+
+        CHILDREN_SNAP_ID=(${CHILDREN_SNAP_LIST[@]})
+
+        # if snap is not in the new_snap_list, and
+        # if children_snap exsist, and
+        # if children_snap is not in the new_snap_list, and
+        # if children_snap is not active_snap
+
+        if [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] && [ ! -z "$CHILDREN_SNAP_ID" ] && [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] && [[ "${CHILDREN_SNAP_ID}" != "${ACTIVE_SNAP_ID}" ]]; then
+
+             # add snapshot to commit
+             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"
         fi
 
-    done
-))
+        # if snap is not in the new_snap_list, and
+        # if children_snap not exsist and
+        # if snap is active_snap, and
+        # if parent_snap is 0 and
+        # if parent_snap is not in the new_snap_list
 
-SNAP_DELETE_LIST=($(
-    unset ID PARENT CHILDREN SNAP_PATH
-    for ID in ${SNAP_CHECK_LIST[@]}; do
-        eval PARENT="\$SNAP${ID}_PARENT"
-        eval CHILDREN="\$SNAP${ID}_CHILDREN"
-        eval SNAP_PATH="\$SNAP${ID}_PATH"
+        if [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] && [ -z "$CHILDREN_SNAP_ID" ] && [[ "${ID}" == "${ACTIVE_SNAP_ID}" ]] && [[ "${PARENT_SNAP_ID}" == "0" ]] && [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT_SNAP_ID} " ]]; then
 
-        echo  >> /tmp/123
-        echo "! ${NEW_SNAP_LIST[@]} =~ ${ID}" >> /tmp/123
-        echo "${PARENT} -ge 0" >> /tmp/123
-        echo "! ${NEW_SNAP_LIST[@]} =~ ${PARENT}" >> /tmp/123
-        echo "-z ${CHILDREN}" >> /tmp/123
-        echo "${ID} != ${SNAP_ACTIVE}" >> /tmp/123
-
-        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&	# if snapshot is not exist in opennebula
-            [[ "${PARENT}" -ge "0" ]] &&                 	# if parent snapshot is greater than or equal to zero
-            [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&	# if parent snapshot is not exist in opennebula
-            [[ -z "${CHILDREN}" ]] &&				# if snapshot have no childrens (last in the chain)
-            [[ "${ID}" != "${SNAP_ACTIVE}" ]]                   # if snapshot not active
-        then
-            echo "${ID}"
+             # add snapshot to commit
+             SNAP_COMMIT_LIST+=" ${ID}"
         fi
 
-    done
-))
 
-echo SNAP_LIST=${SNAP_LIST[@]} >> /tmp/123
-echo NEW_SNAP_LIST=${NEW_SNAP_LIST[@]} >> /tmp/123
-echo SNAP_CHECK_LIST=${SNAP_CHECK_LIST[@]} >> /tmp/123
-echo SNAP_COMMIT_LIST=${SNAP_COMMIT_LIST[@]} >> /tmp/123
-echo SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]} >> /tmp/123
+        # if snap is not in the new_snap_list, and
+        # if children_snap is active_snap, and
+        # if parent_snap is 0 and
+        # if parent_snap is not in the new_snap_list
+
+        if [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] && [[ "${CHILDREN_SNAP_ID}" == "${ACTIVE_SNAP_ID}" ]] && [[ "${PARENT_SNAP_ID}" == "0" ]] && [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT_SNAP_ID} " ]]; then
+
+             # add snapshot to commit
+             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"
+        fi
+        
+    fi
+
+done
+
+echo "SNAP_LIST=${SNAP_LIST[@]}" >> /tmp/123
+echo "NEW_SNAP_LIST=${NEW_SNAP_LIST[@]}" >> /tmp/123
+echo "FS_SNAP_LIST=${FS_SNAP_LIST[@]}" >> /tmp/123
+echo "SNAP_COMMIT_LIST=${SNAP_COMMIT_LIST[@]}" >> /tmp/123
+echo "SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]}" >> /tmp/123
 
 #-------------------------------------------------------------------------------
 # Online mode
