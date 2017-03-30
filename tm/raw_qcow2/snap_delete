@@ -105,12 +105,42 @@ done < <(onevm show -x $VMID | tr '\n' ' ' | grep -Po "<SNAPSHOT>.*?</SNAPSHOT>"
 
 LAST_SNAP="${SNAP_LIST[-1]}"
 NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
-SNAP_DELETE_LIST=($(
-    unset i
-    for snapshot in $(seq 0 "$LAST_SNAP"); do
-        if [[ ! " ${NEW_SNAP_LIST[@]} " =~ " $i " ]] &&  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " $((i+1)) " ]]; then
-            echo "$((i+1))"
+CHECK_SNAP_LIST=( $(seq 0 "$((LAST_SNAP+1))") )
+
+SNAP_COMMIT_LIST=($(
+    unset ID
+    for ID in ${CHECK_SNAP_LIST[@]}; do
+        ACTIVE="$(eval \$SNAP${ID}_ACTIVE )"
+        PARENT="$(eval \$SNAP${ID}_PARENT )"
+        CHILDREN="$(eval \$SNAP${ID}_CHILDREN )"
+        PARENT_CHILDREN="$(eval \$SNAP${PARENT}_CHILDREN )"
+
+        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&	# if snapshot is not exist in opennebula
+            [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&	# if parent snapshot is not exist in opennebula
+            [[ "${PARENT_CHILDREN}" == "${ID}" ]]		# if snapshot have no other childrens
+        then
+            echo "${ID}"
         fi
+
+    done
+))
+
+SNAP_DELETE_LIST=($(
+    unset ID
+    for ID in ${CHECK_SNAP_LIST[@]}; do
+        ACTIVE="$(eval \$SNAP${ID}_ACTIVE )"
+        PARENT="$(eval \$SNAP${ID}_PARENT )"
+        CHILDREN="$(eval \$SNAP${ID}_CHILDREN )"
+        PARENT_CHILDREN="$(eval \$SNAP${PARENT}_CHILDREN )"
+
+        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&	# if snapshot is not exist in opennebula
+            [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&	# if parent snapshot is not exist in opennebula
+            [[ -z "${CHILDREN}" ]]				# if snapshot have no childrens
+            [[ "$ACTIVE" != "YES" ]]                            # if not active
+        then
+            echo "${ID}"
+        fi
+
     done
 ))
 
