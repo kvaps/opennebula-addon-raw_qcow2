@@ -107,6 +107,12 @@ for ID in ${FS_SNAP_LIST[@]}; do
     eval SNAP${ID}_PATH_SHORT="${SNAP_DIR_SHORT}/${ID}"
 
     eval SNAP${ID}_PARENT_PATH='$(qemu-img info ${SNAP'${ID}'_PATH} | awk -F '\'': '\'' '\''/^backing file:/ {print $2}'\'')'
+
+    if [ "$?" != "0" ]; then
+         eval log "Error deleting snapshot: Command execution failed \\\"qemu-img info \${SNAP'${ID}'_PATH}!\\\""
+         exit 1
+    fi
+
     eval SNAP${ID}_PARENT_PATH_SHORT='$(echo ${SNAP'${ID}'_PARENT_PATH_SHORT} | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '\''{print "${SYSTEM_DS_DISK_PATH_SHORT}" $NF}'\'')'
     
     # Get snapshot parent from image file
