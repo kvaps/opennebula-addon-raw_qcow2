@@ -105,19 +105,25 @@ done < <(onevm show -x $VMID | tr '\n' ' ' | grep -Po "<SNAPSHOT>.*?</SNAPSHOT>"
 
 LAST_SNAP="${SNAP_LIST[-1]}"
 NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
-CHECK_SNAP_LIST=( $(seq 0 "$((LAST_SNAP+1))") )
+SNAP_CHECK_LIST=( $(seq 0 "$((LAST_SNAP+1))") )
 
 SNAP_COMMIT_LIST=($(
-    unset ID
-    for ID in ${CHECK_SNAP_LIST[@]}; do
-        ACTIVE="$(eval \$SNAP${ID}_ACTIVE )"
-        PARENT="$(eval \$SNAP${ID}_PARENT )"
-        CHILDREN="$(eval \$SNAP${ID}_CHILDREN )"
-        PARENT_CHILDREN="$(eval \$SNAP${PARENT}_CHILDREN )"
+    unset ID ACTIVE PARENT CHILDREN PARENT_CHILDREN
+    for ID in ${SNAP_CHECK_LIST[@]}; do
+        eval ACTIVE="\${SNAP${ID}_ACTIVE}"
+        eval PARENT="\${SNAP${ID}_PARENT}"
+        eval CHILDREN="\${SNAP${ID}_CHILDREN}"
+        eval PARENT_CHILDREN="\${SNAP${PARENT}_CHILDREN}"
 
-        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&	# if snapshot is not exist in opennebula
-            [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&	# if parent snapshot is not exist in opennebula
-            [[ "${PARENT_CHILDREN}" == "${ID}" ]]		# if snapshot have no other childrens
+        echo "! ${NEW_SNAP_LIST[@]} =~ ${ID}" >> /tmp/123
+        echo "! ${NEW_SNAP_LIST[@]} =~ ${PARENT}" >> /tmp/123
+        echo "${PARENT_CHILDREN} == ${ID}" >> /tmp/123
+
+        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&		# if snapshot is not exist in opennebula
+            ( [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] ||	# if parent snapshot is not exist in opennebula or
+              [[ -z "${PARENT}" ]] ) &&			         	# if snapshot have no any indexed parents
+            ( [[ "${PARENT_CHILDREN}" == "${ID}" ]] ||     		# if snapshot have no other childrens or
+              [[ -z "${PARENT_CHILDREN}" ]] )	         		# if snapshot have no any indexed childrens
         then
             echo "${ID}"
         fi
@@ -126,16 +132,17 @@ SNAP_COMMIT_LIST=($(
 ))
 
 SNAP_DELETE_LIST=($(
-    unset ID
-    for ID in ${CHECK_SNAP_LIST[@]}; do
-        ACTIVE="$(eval \$SNAP${ID}_ACTIVE )"
-        PARENT="$(eval \$SNAP${ID}_PARENT )"
-        CHILDREN="$(eval \$SNAP${ID}_CHILDREN )"
-        PARENT_CHILDREN="$(eval \$SNAP${PARENT}_CHILDREN )"
+    unset ID ACTIVE PARENT CHILDREN PARENT_CHILDREN
+    for ID in ${SNAP_CHECK_LIST[@]}; do
+        eval ACTIVE="\$SNAP${ID}_ACTIVE"
+        eval PARENT="\$SNAP${ID}_PARENT"
+        eval CHILDREN="\$SNAP${ID}_CHILDREN"
+        eval PARENT_CHILDREN="\$SNAP${PARENT}_CHILDREN"
 
         if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&	# if snapshot is not exist in opennebula
+            [[ "${PARENT}" -ge "0" ]] &&                 	# if parent snapshot id greater than or equal to zero
             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&	# if parent snapshot is not exist in opennebula
-            [[ -z "${CHILDREN}" ]]				# if snapshot have no childrens
+            [[ -z "${CHILDREN}" ]] &&				# if snapshot have no childrens
             [[ "$ACTIVE" != "YES" ]]                            # if not active
         then
             echo "${ID}"
@@ -144,6 +151,12 @@ SNAP_DELETE_LIST=($(
     done
 ))
 
+echo SNAP_LIST=${SNAP_LIST[@]} >> /tmp/123
+echo NEW_SNAP_LIST=${NEW_SNAP_LIST[@]} >> /tmp/123
+echo SNAP_CHECK_LIST=${SNAP_CHECK_LIST[@]} >> /tmp/123
+echo SNAP_COMMIT_LIST=${SNAP_COMMIT_LIST[@]} >> /tmp/123
+echo SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]} >> /tmp/123
+
 #-------------------------------------------------------------------------------
 # Online mode
 #-------------------------------------------------------------------------------
@@ -151,9 +164,10 @@ SNAP_DELETE_LIST=($(
 ONLINE_CMD=$(cat <<EOT
 set -ex -o pipefail
 
-for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
-    SNAP_PATH="${SNAP_DIR}/\${SNAP_ID}"
-    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${SNAP_ID}"
+for ID in ${SNAP_COMMIT_LIST[@]} ${SNAP_DELETE_LIST[@]}; do
+
+    SNAP_PATH="${SNAP_DIR}/\${ID}"
+    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${ID}"
 
     if [ ! -f "\$SNAP_PATH" ]; then
         continue # skip, because already deleted
@@ -166,15 +180,15 @@ for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
     SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
     SNAP_BASE_ID=\$(basename \$SNAP_BASE)
 
-    if [[ " ${NEW_SNAP_LIST[@]} " =~ " \$((SNAP_BASE_ID)) " ]]; then
-        continue # skip, because new tree
-    fi
-
-    if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
-        virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --active --wait --pivot &&
-        rm -f \${SNAP_PATH}
-    else
-        virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --wait &&
+    if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " \${ID} " ]]; then 
+        if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
+            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --active --wait --pivot &&
+            rm -f \${SNAP_PATH}
+        else
+            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --wait &&
+            rm -f \${SNAP_PATH}
+        fi
+    elif [[ ! " ${SNAP_DELETE_LIST[@]} " =~ " \${ID} " ]]; then
         rm -f \${SNAP_PATH}
     fi
 
@@ -199,9 +213,9 @@ if [ ! -f "\$PREVIOUS_SNAP" ]; then
     PREVIOUS_SNAP="\$(readlink -f $SYSTEM_DS_DISK_PATH)"
 fi
 
-for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
-    SNAP_PATH="${SNAP_DIR}/\${SNAP_ID}"
-    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${SNAP_ID}"
+for ID in ${SNAP_COMMIT_LIST[@]} ${SNAP_DELETE_LIST[@]}; do
+    SNAP_PATH="${SNAP_DIR}/\${ID}"
+    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${ID}"
 
     if [ ! -f "\$SNAP_PATH" ]; then
         continue # skip, because already deleted
@@ -211,12 +225,12 @@ for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
     SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
     SNAP_BASE_ID=\$(basename \$SNAP_BASE)
 
-    if [[ " ${NEW_SNAP_LIST[@]} " =~ " \$((SNAP_BASE_ID)) " ]]; then
-        continue # skip, because new tree
+    if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " \${ID} " ]]; then 
+        qemu-img commit "\${SNAP_PATH}" &&
+        rm -f \${SNAP_PATH}
+    elif [[ ! " ${SNAP_DELETE_LIST[@]} " =~ " \${ID} " ]]; then
+        rm -f \${SNAP_PATH}
     fi
-
-    qemu-img commit "\${SNAP_PATH}" &&
-    rm -f \${SNAP_PATH}
 
     #TODO: Fix this
     if [ ! -f \$PREVIOUS_SNAP ]; then 
