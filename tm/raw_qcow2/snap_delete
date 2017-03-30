@@ -89,23 +89,18 @@ while read snapshot; do
     while IFS= read -r -d '' element; do
         XPATH_ELEMENTS[i++]="$element"
     done < <(echo "$snapshot" | $XPATH \
-                    /SNAPSHOT/ID \
-                    /SNAPSHOT/ACTIVE)
+                    /SNAPSHOT/ID )
 
     ID="${XPATH_ELEMENTS[j++]}"
-    eval SNAP${ID}_ACTIVE="${XPATH_ELEMENTS[j++]}"
-
     SNAP_LIST=(${SNAP_LIST[@]} "${ID}")
-
-    if [[ "$(eval echo \$SNAP${ID}_ACTIVE)" != "YES" ]]; then
-        SNAP_ACTIVE="${ID}"
-    fi
 
 done < <(onevm show -x $VMID | tr '\n' ' ' | grep -Po "<SNAPSHOT>.*?</SNAPSHOT>")
 
 LAST_SNAP="${SNAP_LIST[-1]}"
 NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
-SNAP_CHECK_LIST=( $(seq 0 "$((LAST_SNAP+1))") )
+SNAP_CHECK_LIST=( $(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '%f\n' ))
+SNAP_ACTIVE="$(basename $(readlink -f $DISK_PATH))"
+
 
 for ID in ${SNAP_CHECK_LIST[@]}; do
     eval SNAP${ID}_PATH="${SNAP_DIR}/${ID}"
@@ -124,20 +119,20 @@ for ID in ${SNAP_CHECK_LIST[@]}; do
 done
 
 SNAP_COMMIT_LIST=($(
-    unset ID ACTIVE PARENT CHILDREN PARENT_CHILDREN
+    unset ID PARENT PARENT_CHILDREN CHILDREN SNAP_PATH
     for ID in ${SNAP_CHECK_LIST[@]}; do
-        eval ACTIVE="\${SNAP${ID}_ACTIVE}"
         eval PARENT="\${SNAP${ID}_PARENT}"
-        eval CHILDREN="\${SNAP${ID}_CHILDREN}"
+        eval PARENT_PARENT=("\${SNAP${PARENT}_PARENT}")
         eval PARENT_CHILDREN=("\${SNAP${PARENT}_CHILDREN}")
-
-        echo "! ${NEW_SNAP_LIST[@]} =~ ${ID}" >> /tmp/123
-        echo "! ${NEW_SNAP_LIST[@]} =~ ${PARENT}" >> /tmp/123
-        echo "${PARENT_CHILDREN} == ${ID}" >> /tmp/123
+        eval SNAP_PATH="\$SNAP${ID}_PATH"
+        eval CHILDREN="\$SNAP${ID}_CHILDREN"
 
         if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&		# if snapshot is not exist in opennebula
             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&		# if parent snapshot is not exist in opennebula
-            [[ "${PARENT_CHILDREN[@]}" == "${ID}" ]] 	    		# if snapshot have no other childrens
+            ( [[ ! -z "${CHILDREN}" ]] ||				# if snapshot have childrens (not last in the chain, or
+            [[ "${PARENT}" == "0" ]] ||                                 # parent snapshot is base or
+            [[ "${PARENT_PARENT}" == "0" ]] ) &&                        # parent parent snapshot is base
+            [[ "${PARENT_CHILDREN[@]}" == "${ID}" ]] 	    		# if parent snapshot have no other childrens
         then
             echo "${ID}"
         fi
@@ -146,18 +141,24 @@ SNAP_COMMIT_LIST=($(
 ))
 
 SNAP_DELETE_LIST=($(
-    unset ID ACTIVE PARENT CHILDREN PARENT_CHILDREN
+    unset ID PARENT CHILDREN SNAP_PATH
     for ID in ${SNAP_CHECK_LIST[@]}; do
-        eval ACTIVE="\$SNAP${ID}_ACTIVE"
         eval PARENT="\$SNAP${ID}_PARENT"
         eval CHILDREN="\$SNAP${ID}_CHILDREN"
-        eval PARENT_CHILDREN="\$SNAP${PARENT}_CHILDREN"
+        eval SNAP_PATH="\$SNAP${ID}_PATH"
+
+        echo  >> /tmp/123
+        echo "! ${NEW_SNAP_LIST[@]} =~ ${ID}" >> /tmp/123
+        echo "${PARENT} -ge 0" >> /tmp/123
+        echo "! ${NEW_SNAP_LIST[@]} =~ ${PARENT}" >> /tmp/123
+        echo "-z ${CHILDREN}" >> /tmp/123
+        echo "${ID} != ${SNAP_ACTIVE}" >> /tmp/123
 
         if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&	# if snapshot is not exist in opennebula
-            [[ "${PARENT}" -ge "0" ]] &&                 	# if parent snapshot id greater than or equal to zero
+            [[ "${PARENT}" -ge "0" ]] &&                 	# if parent snapshot is greater than or equal to zero
             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&	# if parent snapshot is not exist in opennebula
-            [[ -z "${CHILDREN}" ]] &&				# if snapshot have no childrens
-            [[ "$ACTIVE" != "YES" ]]                            # if not active
+            [[ -z "${CHILDREN}" ]] &&				# if snapshot have no childrens (last in the chain)
+            [[ "${ID}" != "${SNAP_ACTIVE}" ]]                   # if snapshot not active
         then
             echo "${ID}"
         fi
@@ -177,30 +178,6 @@ echo SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]} >> /tmp/123
 
 ONLINE_CMD=$(cat <<EOT
 set -ex -o pipefail
-
-SNAP_COMMIT_LIST=(\$(
-    unset ID ACTIVE PARENT CHILDREN PARENT_CHILDREN
-    for ID in ${SNAP_CHECK_LIST[@]}; do
-        eval ACTIVE="\${SNAP${ID}_ACTIVE}"
-        eval PARENT="\${SNAP${ID}_PARENT}"
-        eval CHILDREN="\${SNAP${ID}_CHILDREN}"
-        eval PARENT_CHILDREN=("\${SNAP${PARENT}_CHILDREN[@]}")
-
-        echo "! ${NEW_SNAP_LIST[@]} =~ ${ID}" >> /tmp/123
-        echo "! ${NEW_SNAP_LIST[@]} =~ ${PARENT}" >> /tmp/123
-        echo "${PARENT_CHILDREN[@]} == ${ID}" >> /tmp/123
-
-        if  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&		# if snapshot is not exist in opennebula
-            [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${PARENT} " ]] &&		# if parent snapshot is not exist in opennebula
-            [[ "${PARENT_CHILDREN}" == "${ID}" ]] 	    		# if snapshot have no other childrens
-        then
-            echo "${ID}"
-        fi
-
-    done
-))
-
-
 
 for ID in ${SNAP_COMMIT_LIST[@]} ${SNAP_DELETE_LIST[@]}; do
 
