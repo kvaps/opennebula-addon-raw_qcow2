@@ -105,8 +105,7 @@ for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
     SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${SNAP_ID}"
 
     if [ ! -f "\$SNAP_PATH" ]; then
-        echo "skip \$SNAP_ID \$SNAP_PATH" >> /tmp/123
-        continue # skip
+        continue # skip, because already deleted
     fi
 
     SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "\$SNAP_PATH_SHORT\$")
@@ -115,6 +114,11 @@ for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
 
     SNAP_BASE=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*[source/@file='\${SNAP_PATH}']/backingStore/source/@file")
     SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
+    SNAP_BASE_ID=\$(basename \$SNAP_BASE)
+
+    if [[ " ${NEW_SNAP_LIST[@]} " =~ " \$((SNAP_BASE_ID)) " ]]; then
+        continue # skip, because new tree
+    fi
 
     if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
         virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --active --wait --pivot &&
@@ -129,7 +133,6 @@ for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
     ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
 
 done
-
 
 EOT
 )
