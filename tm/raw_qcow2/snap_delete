@@ -54,11 +54,11 @@ while IFS= read -r -d '' element; do
 done < <(onevm show -x $VMID| $XPATH \
                     /VM/TEMPLATE/DISK[DISK_ID=$DISK_ID]/SOURCE \
                     /VM/TEMPLATE/DISK[DISK_ID=$DISK_ID]/CLONE \
-                    /VM/STATE)
+                    /VM/LCM_STATE)
 
 DISK_SRC="${XPATH_ELEMENTS[j++]}"
 CLONE="${XPATH_ELEMENTS[j++]}"
-STATE="${XPATH_ELEMENTS[j++]}"
+LCM_STATE="${XPATH_ELEMENTS[j++]}"
 
 SNAP_LIST=($(onevm show -x $VMID | sed -n  '/^ *<SNAPSHOT> *$/,/^ *<\/SNAPSHOT>/p' | grep -o '<ID>.*</ID>' | while read line; do echo $line | $XPATH /ID ; done))
 
@@ -100,15 +100,11 @@ set -ex -o pipefail
 for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
     SNAP_PATH="${SNAP_DIR}/\${SNAP_ID}"
     SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${SNAP_ID}"
-    
-    SNAP_PATH="${SNAP_DIR}/\${SNAP_ID}"
-    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${SNAP_ID}"
 
     if [ ! -f "\$SNAP_PATH" ]; then
         continue # skip, because already deleted
     fi
 
-    SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "\$SNAP_PATH_SHORT\$")
     SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "\$SNAP_PATH_SHORT\$")
     DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
 
@@ -146,29 +142,54 @@ set -ex -o pipefail
 
 PREVIOUS_SNAP="${SYSTEM_DS_PATH}/\$(readlink $SYSTEM_DS_DISK_PATH)"
 if [ ! -f "\$PREVIOUS_SNAP" ]; then
-    PREVIOUS_SNAP=\$(readlink -f $SYSTEM_DS_DISK_PATH)
+    PREVIOUS_SNAP="\$(readlink -f $SYSTEM_DS_DISK_PATH)"
 fi
 
-cd "${SNAP_DIR}"
-qemu-img commit "${SNAP_PATH}" 
+for SNAP_ID in ${SNAP_DELETE_LIST[@]}; do
+    SNAP_PATH="${SNAP_DIR}/\${SNAP_ID}"
+    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${SNAP_ID}"
+
+    if [ ! -f "\$SNAP_PATH" ]; then
+        continue # skip, because already deleted
+    fi
+
+    SNAP_BASE=\$(qemu-img info \${SNAP_PATH} | awk -F ': ' '/^backing file:/ {print $2}')
+    SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
+    SNAP_BASE_ID=\$(basename \$SNAP_BASE)
+
+    if [[ " ${NEW_SNAP_LIST[@]} " =~ " \$((SNAP_BASE_ID)) " ]]; then
+        continue # skip, because new tree
+    fi
+
+    qemu-img commit "\${SNAP_PATH}" &&
+    rm -f \${SNAP_PATH}
+
+    #TODO: Fix this
+    if [ ! -f \$PREVIOUS_SNAP ]; then 
+        NEW_DISK_PATH="\${SNAP_BASE}"
+        NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
+        ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
+    fi
+    #TODO: qemu rebase upper image
+
+done
 
 EOT
 )
 
 #-------------------------------------------------------------------------------
 
+case "$LCM_STATE" in
+    59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_CMD}" \
+                             "Error deleting snapshot ${SNAP_PATH}"
+    ;;
 
-if ! [[ $STATE -gt 0 ]]; then
-   log "Error deleting snapshot: Wrong STATE! $STATE"
-   exit 1
-fi
+    53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_CMD}" \
+                             "Error deleting snapshot ${SNAP_PATH}"
+    ;;
 
-if [[ $STATE -eq 3 ]]; then
-    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_CMD}" \
-                     "Error deleting snapshot ${SNAP_PATH}"
-else
-    ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_CMD}" \
-                     "Error deleting snapshot ${SNAP_PATH}"
-fi
-
-
+    * )     log "Error deleting snapshot: Wrong STATE! $STATE"
+            exit 1
+    ;;
+esac
+    
