@@ -60,19 +60,6 @@ DISK_SRC="${XPATH_ELEMENTS[j++]}"
 CLONE="${XPATH_ELEMENTS[j++]}"
 LCM_STATE="${XPATH_ELEMENTS[j++]}"
 
-SNAP_LIST=($(onevm show -x $VMID | sed -n  '/^ *<SNAPSHOT> *$/,/^ *<\/SNAPSHOT>/p' | grep -o '<ID>.*</ID>' | while read line; do echo $line | $XPATH /ID ; done))
-
-LAST_SNAP="${SNAP_LIST[-1]}"
-NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
-SNAP_DELETE_LIST=($(
-    unset i
-    for i in $(seq 0 "$LAST_SNAP"); do
-        if [[ ! " ${NEW_SNAP_LIST[@]} " =~ " $i " ]] &&  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " $((i+1)) " ]]; then
-            echo "$((i+1))"
-        fi
-    done
-))
-
 SYSTEM_DS_PATH=$(dirname ${SRC_PATH})
 IMAGE_DS_PATH=$(dirname ${DISK_SRC})
 
@@ -89,6 +76,43 @@ fi
 
 SNAP_DIR="${DISK_PATH}.snap"
 SNAP_DIR_SHORT="disk.${DISK_ID}.snap"
+
+#-------------------------------------------------------------------------------
+# Get Snapshots information
+#-------------------------------------------------------------------------------
+
+unset SNAP_LIST
+
+while read snapshot; do
+    unset i j XPATH_ELEMENTS
+
+    while IFS= read -r -d '' element; do
+        XPATH_ELEMENTS[i++]="$element"
+    done < <(echo "$snapshot" | $XPATH \
+                    /SNAPSHOT/ID \
+                    /SNAPSHOT/ACTIVE \
+                    /SNAPSHOT/CHILDREN \
+                    /SNAPSHOT/PARENT)
+
+    ID="${XPATH_ELEMENTS[j++]}"
+    SNAP_LIST=(${SNAP_LIST[@]} "${ID}")
+
+    eval SNAP${ID}_ACTIVE="${XPATH_ELEMENTS[j++]}"
+    eval SNAP${ID}_CHILDREN="${XPATH_ELEMENTS[j++]}"
+    eval SNAP${ID}_PARENT="${XPATH_ELEMENTS[j++]}"
+
+done < <(onevm show -x $VMID | tr '\n' ' ' | grep -Po "<SNAPSHOT>.*?</SNAPSHOT>")
+
+LAST_SNAP="${SNAP_LIST[-1]}"
+NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
+SNAP_DELETE_LIST=($(
+    unset i
+    for snapshot in $(seq 0 "$LAST_SNAP"); do
+        if [[ ! " ${NEW_SNAP_LIST[@]} " =~ " $i " ]] &&  [[ ! " ${NEW_SNAP_LIST[@]} " =~ " $((i+1)) " ]]; then
+            echo "$((i+1))"
+        fi
+    done
+))
 
 #-------------------------------------------------------------------------------
 # Online mode
