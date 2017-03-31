@@ -140,7 +140,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
 
     eval PARENT_SNAP_ID="\${SNAP${ID}_PARENT}"
     eval CHILDREN_SNAP_LIST=("\${SNAP${ID}_CHILDREN}")
-    CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP[@]}"
+    CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP_LIST[@]}"
     
 
     if [[ "$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then                    # if children_snaps_number > 1
@@ -167,7 +167,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
             fi
         done
 
-    elif [[ "$CHILDREN_SNAP_LIST_NUM" == "1" ]]                         # if children_snaps_number = 1
+    elif [[ "$CHILDREN_SNAP_LIST_NUM" == "1" ]]; then                   # if children_snaps_number = 1
 
         CHILDREN_SNAP_ID=(${CHILDREN_SNAP_LIST[@]})
 
@@ -205,7 +205,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
              SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                        # add children snapshot to commit
         fi
 
-    elif [[ "$CHILDREN_SNAP_LIST_NUM" == "0" ]]                         # if children_snaps_number = 0
+    elif [[ "$CHILDREN_SNAP_LIST_NUM" == "0" ]]; then                    # if children_snaps_number = 0
 
         #-------------------------------------------------------------------------------
         # user operation:   snapshot "0" is removed right now
