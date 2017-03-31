@@ -101,11 +101,9 @@ NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
 FS_SNAP_LIST=( $(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '%f\n' ))
 ACTIVE_SNAP_ID="$(basename $(readlink -f $DISK_PATH))"
 
-
 for ID in ${FS_SNAP_LIST[@]}; do
     eval SNAP${ID}_PATH="${SNAP_DIR}/${ID}"
     eval SNAP${ID}_PATH_SHORT="${SNAP_DIR_SHORT}/${ID}"
-
     eval SNAP${ID}_PARENT_PATH='$(qemu-img info ${SNAP'${ID}'_PATH} | awk -F '\'': '\'' '\''/^backing file:/ {print $2}'\'')'
 
     if [ "$?" != "0" ]; then
@@ -113,7 +111,11 @@ for ID in ${FS_SNAP_LIST[@]}; do
          exit 1
     fi
 
-    eval SNAP${ID}_PARENT_PATH_SHORT='$(echo ${SNAP'${ID}'_PARENT_PATH_SHORT} | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '\''{print "${SYSTEM_DS_DISK_PATH_SHORT}" $NF}'\'')'
+    # TODO: Fix it
+    eval SNAP${ID}_PARENT_PATH_SHORT='$(echo ${SNAP'${ID}'_PARENT_PATH_SHORT} | awk -F '\'${SYSTEM_DS_DISK_PATH_SHORT}\'' '\''{print "'${SYSTEM_DS_DISK_PATH_SHORT}'" $NF}'\'')'
+
+    eval echo ++++ SNAP${ID}_PARENT_PATH=\${SNAP${ID}_PARENT_PATH} >> /tmp/123
+    eval echo ++++ SNAP${ID}_PARENT_PATH_SHORT=\${SNAP${ID}_PARENT_PATH_SHORT} >> /tmp/123
     
     # Get snapshot parent from image file
     eval SNAP${ID}_PARENT='${SNAP'${ID}'_PARENT:-$(basename $SNAP'${ID}'_PARENT_PATH)}'
@@ -123,16 +125,12 @@ for ID in ${FS_SNAP_LIST[@]}; do
     eval SNAP${PARENT}_CHILDREN+=\" ${ID}\"
 done
 
-# Caclulate NEW_ACTIVE_SNAP_ID
+if [[ -z "${NEW_SNAP_LIST[@]}" ]]; then
+    NEW_ACTIVE_SNAP_ID="0"
+    eval NEW_ACTIVE_SNAP_PATH_SHORT="\$SNAP${NEW_ACTIVE_SNAP_ID}_PATH_SHORT"
+fi
 
-NEW_ACTIVE_SNAP_ID="$ACTIVE_SNAP_ID"
-while [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${NEW_ACTIVE_SNAP_ID} " ]] || [[ "${NEW_ACTIVE_SNAP_ID}" != "0" ]]; do
-    if [ -e "$NEW_ACTIVE_SNAP_ID" ]; then
-        log "Error deleting snapshot: Can not caclulate NEW_ACTIVE_SNAP_ID"
-        exit 1
-    fi
-    eval NEW_ACTIVE_SNAP_ID="\$SNAP${ACTIVE_SNAP_ID}_PARENT"
-done
+
 
 #-------------------------------------------------------------------------------
 # Creating lists
@@ -250,32 +248,36 @@ echo "SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]}" >> /tmp/123
 ONLINE_COMMIT_CMD+='set -ex -o pipefail; '
 
 for ID in ${SNAP_COMMIT_LIST[@]}; do
-    eval SNAP_PATH="\$SNAP${ID}_PATH"
-    eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
-    
-    ONLINE_COMMIT_CMD+=$(cat <<'    EOT'
+eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
+eval SNAP_PARENT_PATH_SHORT="\$SNAP${ID}_PARENT_PATH_SHORT"
+eval echo ++++ SNAP_PARENT_PATH_SHORT="\$SNAP${ID}_PARENT_PATH_SHORT" >> /tmp/123
 
-        # Correct SNAP_PATH
-        SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
-        DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
-        
-        if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
-            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --active --wait --pivot &&
-            rm -f \${SNAP_PATH}
-        else
-            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --wait &&
-            rm -f \${SNAP_PATH}
-        fi
-        
-        # TODO: fix symlink
-        #
-        # NEW_DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_BASE}']/source/@file")
-        # NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-        # ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
-        
-    EOT
+ONLINE_COMMIT_CMD+=$(cat <<EOT
+
+    # Correct SNAP_PATH
+    SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
+    DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
+    SNAP_PARENT_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PARENT_PATH_SHORT\$")
+    
+    if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
+        virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_PARENT_PATH}" --active --wait --pivot &&
+        rm -f \${SNAP_PATH}
+    else
+        virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_PARENT_PATH}" --wait &&
+        rm -f \${SNAP_PATH}
+    fi
+    
+EOT
 )
 done
+
+if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
+    ONLINE_COMMIT_CMD+="ln -sf ${NEW_ACTIVE_SNAP_PATH_SHORT} ${SYSTEM_DS_DISK_PATH}; "
+fi
+
+    echo "NEW_ACTIVE_SNAP_PATH_SHORT=$NEW_ACTIVE_SNAP_PATH_SHORT
+          {#NEW_SNAP_LIST[@]}=${#NEW_SNAP_LIST[@]}" > /tmp/1234
+    
 
 #-------------------------------------------------------------------------------
 # Offline commit operation
@@ -285,24 +287,24 @@ OFFLINE_COMMIT_CMD+='set -ex -o pipefail; '
 
 for ID in ${SNAP_COMMIT_LIST[@]}; do
 
-    eval SNAP_PATH="\$SNAP${ID}_PATH"
-    eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
+eval SNAP_PATH="\$SNAP${ID}_PATH"
+eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
 
-    OFFLINE_COMMIT_CMD+=$(cat <<'    EOT'
-        
-        qemu-img commit "${SNAP_PATH}" &&
-        rm ${SNAP_PATH}
-        
-        # TODO: qemu rebase upper image
-        # TODO: fix symlink
-        
-    EOT
+OFFLINE_COMMIT_CMD+=$(cat <<EOT
+    
+    qemu-img commit "${SNAP_PATH}" &&
+    rm ${SNAP_PATH}
+    
+    # TODO: qemu rebase upper image
+    # TODO: fix symlink
+    
+EOT
 )
-
-# -----
-
 done
 
+if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
+    OFFLINE_COMMIT_CMD+="ln -sf ${NEW_ACTIVE_SNAP_PATH_SHORT} ${SYSTEM_DS_DISK_PATH}; "
+fi
 
 #-------------------------------------------------------------------------------
 # Delete operation
