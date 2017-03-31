@@ -123,6 +123,17 @@ for ID in ${FS_SNAP_LIST[@]}; do
     eval SNAP${PARENT}_CHILDREN+=\" ${ID}\"
 done
 
+# Caclulate NEW_ACTIVE_SNAP_ID
+
+NEW_ACTIVE_SNAP_ID="$ACTIVE_SNAP_ID"
+while [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${NEW_ACTIVE_SNAP_ID} " ]] || [[ "${NEW_ACTIVE_SNAP_ID}" != "0" ]]; do
+    if [ -e "$NEW_ACTIVE_SNAP_ID" ]; then
+        log "Error deleting snapshot: Can not caclulate NEW_ACTIVE_SNAP_ID"
+        exit 1
+    fi
+    eval NEW_ACTIVE_SNAP_ID="\$SNAP${ACTIVE_SNAP_ID}_PARENT"
+done
+
 #-------------------------------------------------------------------------------
 # Creating lists
 #-------------------------------------------------------------------------------
@@ -233,106 +244,102 @@ echo "SNAP_COMMIT_LIST=${SNAP_COMMIT_LIST[@]}" >> /tmp/123
 echo "SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]}" >> /tmp/123
 
 #-------------------------------------------------------------------------------
-# Online mode
+# Online commit operaion
 #-------------------------------------------------------------------------------
 
-ONLINE_CMD=$(cat <<EOT
-set -ex -o pipefail
+ONLINE_COMMIT_CMD+='set -ex -o pipefail; '
 
-for ID in ${SNAP_COMMIT_LIST[@]} ${SNAP_DELETE_LIST[@]}; do
+for ID in ${SNAP_COMMIT_LIST[@]}; do
+    eval SNAP_PATH="\$SNAP${ID}_PATH"
+    eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
+    
+    ONLINE_COMMIT_CMD+=$(cat <<'    EOT'
 
-    SNAP_PATH="${SNAP_DIR}/\${ID}"
-    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${ID}"
-
-    if [ ! -f "\$SNAP_PATH" ]; then
-        continue # skip, because already deleted
-    fi
-
-    SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "\$SNAP_PATH_SHORT\$")
-    DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
-
-    SNAP_BASE=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*[source/@file='\${SNAP_PATH}']/backingStore/source/@file")
-    SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-    SNAP_BASE_ID=\$(basename \$SNAP_BASE)
-
-    if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " \${ID} " ]]; then 
+        # Correct SNAP_PATH
+        SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
+        DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
+        
         if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
-            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --active --wait --pivot &&
+            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --active --wait --pivot &&
             rm -f \${SNAP_PATH}
         else
-            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_BASE}" --wait &&
+            virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --wait &&
             rm -f \${SNAP_PATH}
         fi
-    elif [[ ! " ${SNAP_DELETE_LIST[@]} " =~ " \${ID} " ]]; then
-        rm -f \${SNAP_PATH}
-    fi
+        
+        # TODO: fix symlink
+        #
+        # NEW_DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_BASE}']/source/@file")
+        # NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
+        # ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
+        
+    EOT
+)
+done
 
-    NEW_DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_BASE}']/source/@file")
-    NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-    ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
+#-------------------------------------------------------------------------------
+# Offline commit operation
+#-------------------------------------------------------------------------------
+
+OFFLINE_COMMIT_CMD+='set -ex -o pipefail; '
+
+for ID in ${SNAP_COMMIT_LIST[@]}; do
+
+    eval SNAP_PATH="\$SNAP${ID}_PATH"
+    eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
+
+    OFFLINE_COMMIT_CMD+=$(cat <<'    EOT'
+        
+        qemu-img commit "${SNAP_PATH}" &&
+        rm ${SNAP_PATH}
+        
+        # TODO: qemu rebase upper image
+        # TODO: fix symlink
+        
+    EOT
+)
+
+# -----
 
 done
 
-EOT
-)
 
 #-------------------------------------------------------------------------------
-# Offline mode
+# Delete operation
 #-------------------------------------------------------------------------------
 
-OFFLINE_CMD=$(cat <<EOT
-set -ex -o pipefail
+DELETE_CMD+='set -ex -o pipefail; '
 
-PREVIOUS_SNAP="${SYSTEM_DS_PATH}/\$(readlink $SYSTEM_DS_DISK_PATH)"
-if [ ! -f "\$PREVIOUS_SNAP" ]; then
-    PREVIOUS_SNAP="\$(readlink -f $SYSTEM_DS_DISK_PATH)"
+for ID in ${SNAP_DELETE_LIST[@]}; do
+
+    eval SNAP_PATH="\$SNAP${ID}_PATH"
+    eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
+    DELETE_CMD+="rm ${SNAP_PATH}; "
+
+done
+
+
+
+#-------------------------------------------------------------------------------
+# Send commands
+#-------------------------------------------------------------------------------
+
+
+if [[ "${#SNAP_COMMIT_LIST[@]}" -gt "0" ]]; then
+    case "$LCM_STATE" in
+        59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_COMMIT_CMD}" \
+                                 "Error deleting snapshot: Online commit operation failed"
+        ;;
+        53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_COMMIT_CMD}" \
+                                 "Error deleting snapshot: Offline commit operation failed"
+        ;;
+        * )     log "Error deleting snapshot: Wrong STATE for commit operation!"
+                exit 1
+        ;;
+    esac
 fi
 
-for ID in ${SNAP_COMMIT_LIST[@]} ${SNAP_DELETE_LIST[@]}; do
-    SNAP_PATH="${SNAP_DIR}/\${ID}"
-    SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/\${ID}"
-
-    if [ ! -f "\$SNAP_PATH" ]; then
-        continue # skip, because already deleted
-    fi
-
-    SNAP_BASE=\$(qemu-img info \${SNAP_PATH} | awk -F ': ' '/^backing file:/ {print $2}')
-    SNAP_BASE_SHORT=\$(echo \$SNAP_BASE | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-    SNAP_BASE_ID=\$(basename \$SNAP_BASE)
-
-    if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " \${ID} " ]]; then 
-        qemu-img commit "\${SNAP_PATH}" &&
-        rm -f \${SNAP_PATH}
-    elif [[ ! " ${SNAP_DELETE_LIST[@]} " =~ " \${ID} " ]]; then
-        rm -f \${SNAP_PATH}
-    fi
-
-    #TODO: Fix this
-    if [ ! -f \$PREVIOUS_SNAP ]; then 
-        NEW_DISK_PATH="\${SNAP_BASE}"
-        NEW_DISK_PATH_SHORT=\$(echo \$NEW_DISK_PATH | awk -F "${SYSTEM_DS_DISK_PATH_SHORT}" '{print "${SYSTEM_DS_DISK_PATH_SHORT}" \$NF}')
-        ln -sf "\${NEW_DISK_PATH_SHORT}" "${SYSTEM_DS_DISK_PATH}"
-    fi
-    #TODO: qemu rebase upper image
-
-done
-
-EOT
-)
-
-#-------------------------------------------------------------------------------
-
-case "$LCM_STATE" in
-    59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_CMD}" \
-                             "Error deleting snapshot ${SNAP_PATH}"
-    ;;
-
-    53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_CMD}" \
-                             "Error deleting snapshot ${SNAP_PATH}"
-    ;;
-
-    * )     log "Error deleting snapshot: Wrong STATE! $STATE"
-            exit 1
-    ;;
-esac
-    
+if [[ "${#SNAP_DELETE_LIST[@]}" -gt "0" ]]; then
+    ssh_exec_and_log "${SRC_HOST}" "${DELETE_CMD}" \
+                     "Error deleting snapshot"
+fi
