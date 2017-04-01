@@ -164,6 +164,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
         #-------------------------------------------------------------------------------
         if
 
+             [[ ! -z "${NEW_SNAP_LIST[@]}" ]] &&                             # if new_snap_list is not empty, and
              [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&                 # if snap is not in the new_snap_list, and
              [[ "${CHILDREN_SNAP_ID}" != "${ACTIVE_SNAP_ID}" ]] &&           # if children_snap is not active_snap, and
              [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]]      # if children_snap is not in the new_snap_list
@@ -211,6 +212,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
         # result:           snapshot 3 will be removed from the filesystem
         #-------------------------------------------------------------------------------
         if
+             [[ ! -z "${NEW_SNAP_LIST[@]}" ]] &&                              # if new_snap_list is not empty, and
              [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
              [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
              [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
@@ -233,6 +235,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
         for CHILDREN_SNAP_ID in ${CHILDREN_SNAP_LIST[@]}; do
             eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
             if
+                [[ ! -z "${NEW_SNAP_LIST[@]}" ]] &&                              # if new_snap_list is not empty, and
                 [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
                 [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
                 [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
@@ -290,7 +293,7 @@ EOT
 done
 
 if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
-    ONLINE_COMMIT_CMD+="ln -sf ${NEW_ACTIVE_SNAP_PATH_SHORT} ${SYSTEM_DS_DISK_PATH}; "
+    ONLINE_COMMIT_CMD+="ln -sf '${NEW_ACTIVE_SNAP_PATH_SHORT}' '${SYSTEM_DS_DISK_PATH}'; "
 fi
 
     echo "$ONLINE_COMMIT_CMD" > /tmp/1234
@@ -308,20 +311,29 @@ eval SNAP_PATH="\$SNAP${ID}_PATH"
 eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
 eval SNAP_CHILDREN=("\${SNAP${ID}_CHILDREN}")
 eval SNAP_CHILDREN_PATH="\$SNAP${SNAP_CHILDREN}_PATH"
-eval SNAP_PARENT_PATH="\$SNAP${ID}_PARENT_PATH"
 
 OFFLINE_COMMIT_CMD+=$(cat <<EOT
     
     qemu-img commit "${SNAP_PATH}" &&
     rm ${SNAP_PATH}
-    qemu-img rebase -u -b "\${SNAP_PARENT_PATH}" "${CHILDREN_SNAP_PATH}"
     
 EOT
 )
 done
 
+if [[ ! -z "${SNAP_CHILDREN}" ]] && [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " ${SNAP_CHILDREN} " ]] ; then
+
+    eval NEW_SNAP_PARENT="\$SNAP${ID}_PARENT"
+    while [[ " ${SNAP_COMMIT_LIST[@]} " =~ " ${NEW_SNAP_PARENT} " ]]; do
+        eval NEW_SNAP_PARENT="\$SNAP${NEW_SNAP_PARENT}_PARENT"
+    done
+    eval NEW_SNAP_PARENT_PATH="\$SNAP${NEW_SNAP_PARENT}_PATH"
+
+    OFFLINE_COMMIT_CMD+="qemu-img rebase -u -b '${NEW_SNAP_PARENT_PATH}' '${SNAP_CHILDREN_PATH}'; "
+fi
+
 if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
-    OFFLINE_COMMIT_CMD+="ln -sf ${NEW_ACTIVE_SNAP_PATH_SHORT} ${SYSTEM_DS_DISK_PATH}; "
+    OFFLINE_COMMIT_CMD+="ln -sf '${NEW_ACTIVE_SNAP_PATH_SHORT}' '${SYSTEM_DS_DISK_PATH}'; "
 fi
 
 #-------------------------------------------------------------------------------
