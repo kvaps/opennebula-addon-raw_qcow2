@@ -152,6 +152,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
     if [[ "$CHILDREN_SNAP_LIST_NUM" == "1" ]]; then                   # if children_snaps_number = 1
 
         CHILDREN_SNAP_ID=(${CHILDREN_SNAP_LIST[@]})
+        eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
 
         #-------------------------------------------------------------------------------
         # user operation:   snapshot "2" or "3" is removed right now
@@ -214,7 +215,7 @@ for ID in ${FS_SNAP_LIST[@]}; do
              [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
              [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
         then
-             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
+             SNAP_DELETE_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
         fi
 
     elif [[ "$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then                    # if children_snaps_number > 1
@@ -305,14 +306,15 @@ for ID in ${SNAP_COMMIT_LIST[@]}; do
 
 eval SNAP_PATH="\$SNAP${ID}_PATH"
 eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
+eval SNAP_CHILDREN=("\${SNAP${ID}_CHILDREN}")
+eval SNAP_CHILDREN_PATH="\$SNAP${SNAP_CHILDREN}_PATH"
+eval SNAP_PARENT_PATH="\$SNAP${ID}_PARENT_PATH"
 
 OFFLINE_COMMIT_CMD+=$(cat <<EOT
     
     qemu-img commit "${SNAP_PATH}" &&
     rm ${SNAP_PATH}
-    
-    # TODO: qemu rebase upper image
-    # TODO: fix symlink
+    qemu-img rebase -u -b "\${SNAP_PARENT_PATH}" "${CHILDREN_SNAP_PATH}"
     
 EOT
 )
