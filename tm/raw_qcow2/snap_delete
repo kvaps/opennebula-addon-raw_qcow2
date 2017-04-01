@@ -142,52 +142,24 @@ for ID in ${FS_SNAP_LIST[@]}; do
 
     echo >> /tmp/123
     echo ID=${ID} >> /tmp/123
-    eval echo PARENT_SNAP_ID="\${SNAP${ID}_PARENT}" >> /tmp/123
     eval echo CHILDREN_SNAP_LIST="\${SNAP${ID}_CHILDREN}" >> /tmp/123
     echo CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP[@]}" >> /tmp/123
 
     # get parameters
-
-    eval PARENT_SNAP_ID="\${SNAP${ID}_PARENT}"
     eval CHILDREN_SNAP_LIST=("\${SNAP${ID}_CHILDREN}")
     CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP_LIST[@]}"
-    
 
-    if [[ "$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then                    # if children_snaps_number > 1
-
-    #-------------------------------------------------------------------------------
-    # user operation:   snapshot "2" is removed right now
-    # new_snap_list:    ( 0 1 5 )
-    # fs_snap_map:
-    #                   0 <- {1} <- [2]
-    #                          \
-    #                            <- [4] <- 5 (active)
-    #
-    # result:           snapshot 2 will be removed from the filesystem
-    #-------------------------------------------------------------------------------
-
-        for CHILDREN_SNAP_ID in ${CHILDREN_SNAP_LIST[@]}; do
-            eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
-            if
-                [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
-                [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
-                [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
-            then
-                SNAP_DELETE_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to delete
-            fi
-        done
-
-    elif [[ "$CHILDREN_SNAP_LIST_NUM" == "1" ]]; then                   # if children_snaps_number = 1
+    if [[ "$CHILDREN_SNAP_LIST_NUM" == "1" ]]; then                   # if children_snaps_number = 1
 
         CHILDREN_SNAP_ID=(${CHILDREN_SNAP_LIST[@]})
 
         #-------------------------------------------------------------------------------
-        # user operation:   snapshot "1" or "2" is removed right now
-        # new_snap_list:    ( 0 )
+        # user operation:   snapshot "2" or "3" is removed right now
+        # new_snap_list:    ( 0 1 )
         # fs_snap_map:
-        #                   0 <- {1} <- [2] <- 3 (active)
+        #                   0  <- 1 <- {2} <- [3] <- 4 (active)
         #
-        # result:           snapshot "2" will be commited to snapshot "1"
+        # result:           snapshot "3" will be commited to snapshot "2"
         #-------------------------------------------------------------------------------
         if
 
@@ -200,38 +172,74 @@ for ID in ${FS_SNAP_LIST[@]}; do
 
         #-------------------------------------------------------------------------------
         # user operation:   snapshot "0" is removed right now
-        # new_snap_list:    ( )
+        # new_snap_list:    ( )                              
         # fs_snap_map:
-        #                   [0] <- {1} <- [2] (active)
+        #                   [0] <- {1} <- [2] (active)       
         #
         # result:           snapshot "2" will be commited to snapshot "1"
         #-------------------------------------------------------------------------------
-        if
-             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&                 # if snap is not in the new_snap_list, and
-             [[ "${CHILDREN_SNAP_ID}" == "${ACTIVE_SNAP_ID}" ]] &&           # if children_snap is active_snap, and
-             [[ "${PARENT_SNAP_ID}" == "0" ]] &&                             # if parent_snap is 0 and
-             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " 0 " ]]                        # if parent_snap is not in the new_snap_list
-        then
-             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                        # add children snapshot to commit
-        fi
-
-    elif [[ "$CHILDREN_SNAP_LIST_NUM" == "0" ]]; then                    # if children_snaps_number = 0
-
+        # user operation:   snapshot "1" is removed right now
+        # new_snap_list:    ( )
+        # fs_snap_map:
+        #                   [0] <- [1] <- {2} <- [4] (active)
+        #
+        # result:           snapshot "4" will be commited to snapshot "2"
         #-------------------------------------------------------------------------------
         # user operation:   snapshot "0" is removed right now
         # new_snap_list:    ( )
         # fs_snap_map:
-        #                   [0] <- {1} (active)
+        #                   {0} <- [1] (active)
         #
         # result:           snapshot "1" will be commited to snapshot "0"
         #-------------------------------------------------------------------------------
         if
-             [[ "${PARENT_SNAP_ID}" == "0" ]] &&                             # if parent_snap is 0 and
-             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " 0 " ]] &&                     # if "0" snapshot is not in the new_snap_list, and
-             [[ "${ID}" == "${ACTIVE_SNAP_ID}" ]]                            # if snap is active_snap
+             [[ -z "${NEW_SNAP_LIST[@]}" ]] &&                                # if new_snap_list is empty
+             [[ "${CHILDREN_SNAP_ID}" == "${ACTIVE_SNAP_ID}" ]]               # if children_snap is active_snap, and
         then
-             SNAP_COMMIT_LIST+=" ${ID}"                                      # add snapshot to commit
+             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
         fi
+
+        #-------------------------------------------------------------------------------
+        # user operation:   snapshot "3" is removed right now
+        # new_snap_list:    ( 0 1 2 5 )
+        # fs_snap_map:
+        #                   0 <-  1 <- {2} <- [3]
+        #                          \
+        #                            <- 4 <- 5 (active)
+        #
+        # result:           snapshot 3 will be removed from the filesystem
+        #-------------------------------------------------------------------------------
+        if
+             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
+             [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
+             [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
+        then
+             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
+        fi
+
+    elif [[ "$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then                    # if children_snaps_number > 1
+
+        #-------------------------------------------------------------------------------
+        # user operation:   snapshot "2" is removed right now
+        # new_snap_list:    ( 0 1 5 )
+        # fs_snap_map:
+        #                   0 <- {1} <- [2]
+        #                          \
+        #                            <- [4] <- 5 (active)
+        #
+        # result:           snapshot 2 will be removed from the filesystem
+        #-------------------------------------------------------------------------------
+        for CHILDREN_SNAP_ID in ${CHILDREN_SNAP_LIST[@]}; do
+            eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
+            if
+                [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
+                [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
+                [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
+            then
+                SNAP_DELETE_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to delete
+            fi
+        done
+
     fi
 
 done
