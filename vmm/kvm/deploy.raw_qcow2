@@ -31,7 +31,13 @@ for DISK_PATH in ${DISKS[@]}; do
     DISK_NAME="$(basename "$DISK_PATH")"
 
     # Fix disk path
-    DISK_TARGET_PATH_SHORT="$(readlink -f "$DISK_PATH" | awk -F "${DISK_NAME}" '{print "'${DISK_NAME}'"$NF}')"
+    while [[ -z "DISK_TARGET_PATH_SHORT" ]] || [[ "$((TIMEOUT++))" -le "20" ]]; do 
+        sleep 1
+        DISK_TARGET_PATH_SHORT="$(readlink "$DISK_PATH")"
+    done
+
+#    DISK_TARGET_PATH_SHORT="$(readlink "$DISK_PATH")"
+
     DISK_TARGET_PATH="${DISK_DIR}/${DISK_TARGET_PATH_SHORT}"
     xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_PATH']/source/@file" --value "$DISK_TARGET_PATH" $domain
 
