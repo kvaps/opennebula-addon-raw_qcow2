@@ -115,10 +115,6 @@ rm -f "${DST_PATH}"
 
 ln -s ${DST_FILE}.snap/0 ${DST_PATH}
 
-cd ${DST_PATH}.snap
-
-ln -s . ${DST_PATH}.snap/${DST_FILE}.snap
-
 ${RESIZE_CMD}
 EOF
 )
