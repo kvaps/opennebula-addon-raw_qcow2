@@ -312,7 +312,7 @@ if [[ ! -z "${SNAP_CHILDREN}" ]] && [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " ${SNAP_
     done
     eval NEW_SNAP_PARENT_PATH="\$SNAP${NEW_SNAP_PARENT}_PATH"
 
-    OFFLINE_COMMIT_CMD+="qemu-img rebase -u -b '${NEW_SNAP_PARENT_PATH}' '${SNAP_CHILDREN_PATH}'; "
+    OFFLINE_COMMIT_CMD+="qemu-img rebase -b '${NEW_SNAP_PARENT_PATH}' '${SNAP_CHILDREN_PATH}'; "
 fi
 
 if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
