@@ -109,12 +109,18 @@ fi
 for ID in ${FS_SNAP_LIST[@]}; do
     eval SNAP${ID}_PATH="${SNAP_DIR}/${ID}"
     eval SNAP${ID}_PATH_SHORT="${SNAP_DIR_SHORT}/${ID}"
-    eval SNAP${ID}_PARENT_PATH='$(qemu-img info ${SNAP'${ID}'_PATH} | awk -F '\'': '\'' '\''/^backing file:/ {print $2}'\'')'
-
-    if [ "$?" != "0" ]; then
-         eval log "Error deleting snapshot: Command execution failed \\\"qemu-img info \${SNAP'${ID}'_PATH}!\\\""
+    eval SNAP${ID}_INFO_JSON='$(qemu-img info --output=json ${SNAP'${ID}'_PATH})'
+    if [ -z "$(eval echo \$SNAP${ID}_INFO_JSON)" ]; then
+         eval log '"Error deleting snapshot: Command execution failed: \"qemu-img info --output=json ${SNAP'${ID}'_PATH}\""'
          exit 1
     fi
+
+    eval SNAP${ID}_PARENT_PATH='$(echo "$SNAP'${ID}'_INFO_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['\''full-backing-filename'\''])")'
+    if [[ -z "$(eval echo \$SNAP${ID}_PARENT_PATH)" ]]; then
+        eval SNAP${ID}_PARENT_PATH='$(echo "$SNAP'${ID}'_INFO_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['\''backing-filename'\''])")'
+    fi
+
+    eval echo SNAP${ID}_PARENT_PATH=\$SNAP${ID}_PARENT_PATH >> /tmp/123
 
     eval SNAP${ID}_PARENT_PATH_SHORT='$(echo ${SNAP'${ID}'_PARENT_PATH} | awk -F "'${SYSTEM_DS_DISK_PATH_SHORT}'" '\''{print "'${SYSTEM_DS_DISK_PATH_SHORT}'" $NF}'\'')'
 
@@ -130,8 +136,6 @@ if [[ -z "${NEW_SNAP_LIST[@]}" ]]; then
     NEW_ACTIVE_SNAP_ID="0"
     eval NEW_ACTIVE_SNAP_PATH_SHORT="\$SNAP${NEW_ACTIVE_SNAP_ID}_PATH_SHORT"
 fi
-
-
 
 #-------------------------------------------------------------------------------
 # Creating lists
@@ -168,30 +172,16 @@ for ID in ${FS_SNAP_LIST[@]}; do
         fi
 
         #-------------------------------------------------------------------------------
-        # user operation:   snapshot "0" is removed right now
-        # new_snap_list:    ( )                              
-        # fs_snap_map:
-        #                   [0] <- {1} <- [2] (active)       
-        #
-        # result:           snapshot "2" will be commited to snapshot "1"
-        #-------------------------------------------------------------------------------
         # user operation:   snapshot "1" is removed right now
         # new_snap_list:    ( )
         # fs_snap_map:
-        #                   [0] <- [1] <- {2} <- [4] (active)
+        #                   {0} <- [{1}] <- [{2}] <- [4] (active)
         #
-        # result:           snapshot "4" will be commited to snapshot "2"
-        #-------------------------------------------------------------------------------
-        # user operation:   snapshot "0" is removed right now
-        # new_snap_list:    ( )
-        # fs_snap_map:
-        #                   {0} <- [1] (active)
-        #
-        # result:           snapshot "1" will be commited to snapshot "0"
+        # result:           snapshot "4", "2", "1" will be commited to snapshot "2"
         #-------------------------------------------------------------------------------
         if
-             [[ -z "${NEW_SNAP_LIST[@]}" ]] &&                                # if new_snap_list is empty
-             [[ "${CHILDREN_SNAP_ID}" == "${ACTIVE_SNAP_ID}" ]]               # if children_snap is active_snap, and
+             [[ -z "${NEW_SNAP_LIST[@]}" ]] &&                                # if new_snap_list is empty, and
+             [[ ! -z "${CHILDREN_SNAP_ID}" ]]                                 # children_snap is exist
         then
              SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
         fi
@@ -264,7 +254,7 @@ ONLINE_COMMIT_CMD+=$(cat <<EOT
     # Correct SNAP_PATH
     SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
     DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
-    SNAP_PARENT_PATH="$SNAP_PARENT_PATH"
+    SNAP_PARENT_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PARENT_PATH_SHORT\$")
     
     if [ "\$SNAP_PATH" == "\$DISK_PATH" ]; then
         virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_PARENT_PATH}" --active --wait --pivot &&
@@ -308,11 +298,11 @@ if [[ ! -z "${SNAP_CHILDREN}" ]] && [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " ${SNAP_
 
     eval NEW_SNAP_PARENT="\$SNAP${ID}_PARENT"
     while [[ " ${SNAP_COMMIT_LIST[@]} " =~ " ${NEW_SNAP_PARENT} " ]]; do
-        eval NEW_SNAP_PARENT="\$SNAP${NEW_SNAP_PARENT}_PARENT"
+	eval NEW_SNAP_PARENT="\$SNAP${NEW_SNAP_PARENT}_PARENT"
     done
     eval NEW_SNAP_PARENT_PATH="\$SNAP${NEW_SNAP_PARENT}_PATH"
 
-    OFFLINE_COMMIT_CMD+="qemu-img rebase -b '${NEW_SNAP_PARENT_PATH}' '${SNAP_CHILDREN_PATH}'; "
+    OFFLINE_COMMIT_CMD+="qemu-img rebase -u -b '${NEW_SNAP_PARENT_PATH}' '${SNAP_CHILDREN_PATH}'; "
 fi
 
 if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
@@ -339,19 +329,34 @@ done
 # Send commands
 #-------------------------------------------------------------------------------
 
+echo "SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )" >> /tmp/123
 
 if [[ "${#SNAP_COMMIT_LIST[@]}" -gt "0" ]]; then
     case "$LCM_STATE" in
-        59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_COMMIT_CMD}" \
-                 "Error deleting snapshot: Online commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
-        ;;
-        53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_COMMIT_CMD}" \
-                "Error deleting snapshot: Offline commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
-        ;;
-        * )     log "Error deleting snapshot: Wrong STATE for commit operation! LCM_STATE=${LCM_STATE}"
-                exit 1
-        ;;
+	59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_COMMIT_CMD}" \
+		 "Error deleting snapshot: Online commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
+	;;
+	53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_COMMIT_CMD}" \
+		"Error deleting snapshot: Offline commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
+	;;
+	* )     log "Error deleting snapshot: Wrong STATE for commit operation! LCM_STATE=${LCM_STATE}"
+		exit 1
+	;;
     esac
+
+    for ID in ${SNAP_COMMIT_LIST[@]}; do
+        eval SNAP_CHILDREN=("\${SNAP${ID}_CHILDREN}")
+        if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " $SNAP_CHILDREN " ]]; then 
+            eval SNAP_CHILDREN_PATH="\$SNAP${SNAP_CHILDREN}_PATH"
+            NEW_SNAP_CHILDREN_PARENT="$(basename $(qemu-img info "$SNAP_CHILDREN_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['full-backing-filename'])" ))"
+            if [[ -z "$NEW_SNAP_CHILDREN_PARENT" ]]; then
+                NEW_SNAP_CHILDREN_PARENT="$(basename $(qemu-img info "$SNAP_CHILDREN_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['backing-filename'])" ))"
+            fi
+
+            # Run out of host, to avoid i/o errors
+            qemu-img rebase -u -b "${NEW_SNAP_CHILDREN_PARENT}" "${SNAP_CHILDREN_PATH}"
+        fi
+    done
 fi
 
 if [[ "${#SNAP_DELETE_LIST[@]}" -gt "0" ]]; then

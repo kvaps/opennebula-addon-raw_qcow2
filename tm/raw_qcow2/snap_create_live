@@ -22,6 +22,7 @@ SRC=$1
 SNAP_ID=$2
 VMID=$3
 DSID=$4
+DOMAIN="one-$VMID"
 
 if [ -z "${ONE_LOCATION}" ]; then
     TMCOMMON=/var/lib/one/remotes/tm/tm_common.sh
@@ -43,7 +44,7 @@ SRC_HOST=$(arg_host $SRC)
 # Get Image information
 #-------------------------------------------------------------------------------
 
-DISK_ID=$(basename ${SRC} | cut -d. -f2)
+DISK_ID=$(basename "${SRC}" | cut -d. -f2)
 
 XPATH="${DRIVER_PATH}/../../datastore/xpath.rb --stdin"
 
@@ -82,29 +83,89 @@ NEXT_SNAP_ID=$(($SNAP_ID+1))
 SNAP_DIR="${DISK_PATH}.snap"
 SNAP_DIR_SHORT="${DISK_PATH_SHORT}.snap"
 
-SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
-SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
+SNAP_PATH="${SNAP_DIR}/${SNAP_ID}"
+SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${SNAP_ID}"
+
+NEXT_SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
+NEXT_SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
+
+ACTIVE_SNAP_ID="$(basename "$(readlink $SYSTEM_DS_DISK_PATH)")"
+ACTIVE_SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${ACTIVE_SNAP_ID}"
+
+if [[ -z "$ACTIVE_SNAP_ID" ]]; then
+    log "Error creating snapshot: Failed to readlink $SYSTEM_DS_DISK_PATH"
+    exit 3
+fi
 
 CMD=$(cat <<EOT
 set -ex -o pipefail
 
 mkdir -p "${SNAP_DIR}"
 
-# The file must be created beforehand or libvirt complains with
-# "permission denied"
-touch "$SNAP_PATH"
-
 if virsh -c $LIBVIRT_URI domfsfreeze $DEPLOY_ID ; then
     trap "virsh -c $LIBVIRT_URI domfsthaw $DEPLOY_ID" EXIT TERM INT HUP
 fi
 
-virsh snapshot-create-as --domain "$DEPLOY_ID" "${DISK_ID}-${SNAP_ID}" \
-    --diskspec "$TARGET",file="$SNAP_PATH" \
-    --disk-only --atomic --no-metadata
+if [[ "$ACTIVE_SNAP_ID" != "$SNAP_ID" ]]; then
+    touch "$SNAP_PATH"
+    virsh snapshot-create-as --domain "$DEPLOY_ID" "${DISK_ID}-${SNAP_ID}" \
+        --diskspec "$TARGET",file="$SNAP_PATH" \
+        --disk-only --atomic --no-metadata || rm $SNAP_PATH
+fi
 
-ln -sf "$SNAP_PATH_SHORT" "$SYSTEM_DS_DISK_PATH"
+# The file must be created beforehand or libvirt complains with
+# "permission denied"
+touch "$NEXT_SNAP_PATH"
+
+virsh snapshot-create-as --domain "$DEPLOY_ID" "${DISK_ID}-${NEXT_SNAP_ID}" \
+    --diskspec "$TARGET",file="$NEXT_SNAP_PATH" \
+    --disk-only --atomic --no-metadata || rm $NEXT_SNAP_PATH
+
+
+ln -sf "$NEXT_SNAP_PATH_SHORT" "$SYSTEM_DS_DISK_PATH"
+
 EOT
 )
 
+
+REVERT_CMD=$(cat <<EOT
+set -ex -o pipefail
+
+# Correct SNAP_PATH
+SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
+DISK_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "/domain/devices/disk[.//@file='\${SNAP_PATH}']/source/@file")
+SNAP_PARENT_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v ".//disk[source/@file='\${SNAP_PATH}']/backingStore/source/@file")
+
+virsh blockcommit $DOMAIN --path "\${DISK_PATH}" --top "\${SNAP_PATH}" --base "\${SNAP_PARENT_PATH}" --active --wait --pivot &&
+rm -f \${SNAP_PATH} || exit 2
+
+ln -sf "${PREVIOUS_SNAP_PATH_SHORT}" "$SYSTEM_DS_DISK_PATH"
+
+EOT
+)
+
+
 ssh_exec_and_log "${SRC_HOST}" "${CMD}" \
                  "Error creating snapshot ${SNAP_PATH}"
+
+
+until ls "$(readlink -f $SYSTEM_DS_DISK_PATH)"; do
+    sleep 1
+    if [[ "$((TIMEOUT++))" -gt "20" ]]; then
+        log "Error creating snapshot ${SNAP_PATH}: Snapshot operation successful, but file not found on opennebula server. Reverting..."
+        # Reverting snapshot
+        ssh_exec_and_log "${SRC_HOST}" "${REVERT_CMD}" \
+                         "Error reverting snapshot ${SNAP_PATH}"
+        exit 1
+    fi
+done
+
+
+if [[ "$ACTIVE_SNAP_ID" != "$SNAP_ID" ]]; then
+    PREVIOUS_SNAP_ID="$(basename $(qemu-img info "${SNAP_PATH}" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['backing-filename'])" ))"
+    qemu-img rebase -u -b "${PREVIOUS_SNAP_ID}" "${SNAP_PATH}"
+fi
+
+# Run out of host, to avoid i/o error
+PREVIOUS_SNAP_ID="$(basename $(qemu-img info "${NEXT_SNAP_PATH}" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['backing-filename'])" ))"
+qemu-img rebase -u -b "${PREVIOUS_SNAP_ID}" "${NEXT_SNAP_PATH}"

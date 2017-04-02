@@ -75,22 +75,28 @@ NEXT_SNAP_ID=$(($SNAP_ID+1))
 SNAP_DIR="${DISK_PATH}.snap"
 SNAP_DIR_SHORT="${DISK_PATH_SHORT}.snap"
 
-SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
-SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
+SNAP_PATH="${SNAP_DIR}/${SNAP_ID}"
+SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${SNAP_ID}"
+
+NEXT_SNAP_PATH="${SNAP_DIR}/${NEXT_SNAP_ID}"
+NEXT_SNAP_PATH_SHORT="${SNAP_DIR_SHORT}/${NEXT_SNAP_ID}"
 
 SNAP_CMD=$(cat <<EOT
 set -ex -o pipefail
 
 mkdir -p "${SNAP_DIR}"
 
-PREVIOUS_SNAP="${SYSTEM_DS_PATH}/\$(readlink $SYSTEM_DS_DISK_PATH)"
-if [ ! -f "\$PREVIOUS_SNAP" ]; then
-    PREVIOUS_SNAP=\$(readlink -f $SYSTEM_DS_DISK_PATH)
-fi
+ACTIVE_SNAP_ID="\$(basename \$(readlink $SYSTEM_DS_DISK_PATH))"
 
 cd "${SNAP_DIR}"
-qemu-img create -f qcow2 -b "\${PREVIOUS_SNAP}" "${SNAP_PATH}"
-ln -sf "$SNAP_PATH_SHORT" "$SYSTEM_DS_DISK_PATH"
+
+if [[ "$ACTIVE_SNAP_ID" != "$SNAP_ID" ]] && [[ ! -f "$SNAP_PATH" ]]; then
+    qemu-img create -f qcow2 -b "\${ACTIVE_SNAP_ID}" "${SNAP_PATH}"
+    ACTIVE_SNAP_ID="${SNAP_ID}"
+fi
+
+qemu-img create -f qcow2 -b "\${ACTIVE_SNAP_ID}" "${NEXT_SNAP_PATH}"
+ln -sf "$NEXT_SNAP_PATH_SHORT" "$SYSTEM_DS_DISK_PATH"
 EOT
 )
 
