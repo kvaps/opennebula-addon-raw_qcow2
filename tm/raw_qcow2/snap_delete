@@ -102,7 +102,7 @@ FS_SNAP_LIST=( $(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '
 ACTIVE_SNAP_ID="$(basename $(readlink -f $DISK_PATH))"
 
 if [ ! -f "${DISK_PATH}" ]; then
-    log "Error deleting snapshot: Active snapshot is not exist!"
+    log "Error deleting snapshot: Active snapshot is not exist! ACTIVE_SNAP_ID=${ACTIVE_SNAP_ID}"
     exit 3
 fi
 
@@ -139,11 +139,6 @@ fi
 
 
 for ID in ${FS_SNAP_LIST[@]}; do
-
-    echo >> /tmp/123
-    echo ID=${ID} >> /tmp/123
-    eval echo CHILDREN_SNAP_LIST="\${SNAP${ID}_CHILDREN}" >> /tmp/123
-    echo CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP[@]}" >> /tmp/123
 
     # get parameters
     eval CHILDREN_SNAP_LIST=("\${SNAP${ID}_CHILDREN}")
@@ -252,14 +247,6 @@ done
 SNAP_COMMIT_LIST=($(echo ${SNAP_COMMIT_LIST[@]} | tr " " "\n" | sort -ur ))
 SNAP_DELETE_LIST=($(echo ${SNAP_DELETE_LIST[@]} | tr " " "\n" | sort -ur ))
 
-echo  >> /tmp/123
-echo "ACTIVE_SNAP_ID=${ACTIVE_SNAP_ID}" >> /tmp/123
-echo "SNAP_LIST=${SNAP_LIST[@]}" >> /tmp/123
-echo "NEW_SNAP_LIST=${NEW_SNAP_LIST[@]}" >> /tmp/123
-echo "FS_SNAP_LIST=${FS_SNAP_LIST[@]}" >> /tmp/123
-echo "SNAP_COMMIT_LIST=${SNAP_COMMIT_LIST[@]}" >> /tmp/123
-echo "SNAP_DELETE_LIST=${SNAP_DELETE_LIST[@]}" >> /tmp/123
-
 #-------------------------------------------------------------------------------
 # Online commit operaion
 #-------------------------------------------------------------------------------
@@ -271,7 +258,6 @@ eval SNAP_PATH="\$SNAP${ID}_PATH"
 eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
 eval SNAP_PARENT_PATH="\$SNAP${ID}_PARENT_PATH"
 eval SNAP_PARENT_PATH_SHORT="\$SNAP${ID}_PARENT_PATH_SHORT"
-eval echo ++++ SNAP_PARENT_PATH_SHORT="\$SNAP${ID}_PARENT_PATH_SHORT" >> /tmp/123
 
 ONLINE_COMMIT_CMD+=$(cat <<EOT
 
@@ -295,9 +281,6 @@ done
 if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
     ONLINE_COMMIT_CMD+="ln -sf '${NEW_ACTIVE_SNAP_PATH_SHORT}' '${SYSTEM_DS_DISK_PATH}'; "
 fi
-
-    echo "$ONLINE_COMMIT_CMD" > /tmp/1234
-    
 
 #-------------------------------------------------------------------------------
 # Offline commit operation
@@ -360,12 +343,12 @@ done
 if [[ "${#SNAP_COMMIT_LIST[@]}" -gt "0" ]]; then
     case "$LCM_STATE" in
         59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_COMMIT_CMD}" \
-                                 "Error deleting snapshot: Online commit operation failed"
+                 "Error deleting snapshot: Online commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
         ;;
         53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_COMMIT_CMD}" \
-                                 "Error deleting snapshot: Offline commit operation failed"
+                "Error deleting snapshot: Offline commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
         ;;
-        * )     log "Error deleting snapshot: Wrong STATE for commit operation!"
+        * )     log "Error deleting snapshot: Wrong STATE for commit operation! LCM_STATE=${LCM_STATE}"
                 exit 1
         ;;
     esac
@@ -373,5 +356,5 @@ fi
 
 if [[ "${#SNAP_DELETE_LIST[@]}" -gt "0" ]]; then
     ssh_exec_and_log "${SRC_HOST}" "${DELETE_CMD}" \
-                     "Error deleting snapshot"
+                     "Error deleting snapshot: Delete operaion failed. SNAP_DELETE_LIST=( ${SNAP_DELETE_LIST[@]} )"
 fi
