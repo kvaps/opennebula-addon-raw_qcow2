@@ -36,7 +36,7 @@ for DISK_PATH in ${DISKS[@]}; do
     xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_PATH']/source/@file" --value "$DISK_TARGET_PATH" $domain
 
     # Fix disks format
-    DISK_TARGET_FORMAT="$(qemu-img info "$DISK_TARGET_PATH" | awk -F ': ' '/^file format/ {print $2}')"
+    DISK_TARGET_FORMAT="$(qemu-img info "$DISK_TARGET_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['format'])" )"
     xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_TARGET_PATH']/driver/@type" --value "$DISK_TARGET_FORMAT" $domain
 done
 
