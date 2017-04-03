@@ -89,7 +89,7 @@ ssh_make_path $DST_HOST $DST_DIR $MONITOR
 log "Linking $SRC_PATH in $DST"
 
 ssh_exec_and_log $DST_HOST \
-                "cd $DST_DIR; rm -f $DST_PATH ; mkdir -p $DST_PATH.snap; ln -s $SRC_PATH $DST_PATH.snap/0 ; ln -s $(basename $DST_PATH).snap/0 $DST_PATH" \
+                "cd $DST_DIR; rm -f $DST_PATH ; mkdir -p $SRC_PATH.snap; ln -s $SRC_PATH $SRC_PATH.snap/0 ; ln -s $SRC_PATH.snap/0 $DST_PATH" \
                 "Error linking $SRC to $DST"
 
 exit 0

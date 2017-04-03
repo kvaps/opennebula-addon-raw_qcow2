@@ -31,14 +31,17 @@ for DISK_PATH in ${DISKS[@]}; do
     DISK_NAME="$(basename "$DISK_PATH")"
 
     # Fix disk path
-    while [[ -z "DISK_TARGET_PATH_SHORT" ]] || [[ "$((TIMEOUT++))" -le "20" ]]; do 
+    while [[ -z "DISK_TARGET_LINK" ]] || [[ "$((TIMEOUT++))" -le "20" ]]; do 
         sleep 1
-        DISK_TARGET_PATH_SHORT="$(readlink "$DISK_PATH")"
+        DISK_TARGET_LINK="$(readlink "$DISK_PATH")"
     done
 
-#    DISK_TARGET_PATH_SHORT="$(readlink "$DISK_PATH")"
+    if [[ "${DISK_TARGET_LINK:0:1}" == "/" ]]; then
+        DISK_TARGET_PATH="${DISK_TARGET_LINK}"
+    else
+        DISK_TARGET_PATH="${DISK_DIR}/${DISK_TARGET_LINK}"
+    fi
 
-    DISK_TARGET_PATH="${DISK_DIR}/${DISK_TARGET_PATH_SHORT}"
     xmlstarlet edit -L --update "/domain/devices/disk[source/@file='$DISK_PATH']/source/@file" --value "$DISK_TARGET_PATH" $domain
 
     # Fix disks format
@@ -54,3 +57,4 @@ else
     error_message "Could not create domain from $domain"
     exit -1
 fi
+
