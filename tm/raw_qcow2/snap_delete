@@ -96,62 +96,67 @@ while read snapshot; do
 
 done < <(onevm show -x $VMID | tr '\n' ' ' | grep -Po "<SNAPSHOT>.*?</SNAPSHOT>")
 
-LAST_SNAP="${SNAP_LIST[-1]}"
 NEW_SNAP_LIST=( "${SNAP_LIST[@]/$SNAP_ID}" )
-FS_SNAP_LIST=( $(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '%f\n' ))
-ACTIVE_SNAP_ID="$(basename $(readlink -f $DISK_PATH))"
+
+
+COMMON_COMMIT_CMD=$(cat <<EOT
+set -ex -o pipefail
+
+FS_SNAP_LIST=( \$(find $SNAP_DIR -mindepth 1 -maxdepth 1 -name '[0-9]*' -printf '%f\n' ))
+ACTIVE_SNAP_ID="\$(basename \$(readlink -f $DISK_PATH))"
 
 if [ ! -f "${DISK_PATH}" ]; then
-    log "Error deleting snapshot: Active snapshot is not exist! ACTIVE_SNAP_ID=${ACTIVE_SNAP_ID}"
+    >&2 echo "Error deleting snapshot: Active snapshot is not exist!"
     exit 3
 fi
 
-for ID in ${FS_SNAP_LIST[@]}; do
-    eval SNAP${ID}_PATH="${SNAP_DIR}/${ID}"
-    eval SNAP${ID}_PATH_SHORT="${SNAP_DIR_SHORT}/${ID}"
-    eval SNAP${ID}_INFO_JSON='$(qemu-img info --output=json ${SNAP'${ID}'_PATH})'
-    if [ -z "$(eval echo \$SNAP${ID}_INFO_JSON)" ]; then
-         eval log '"Error deleting snapshot: Command execution failed: \"qemu-img info --output=json ${SNAP'${ID}'_PATH}\""'
+for ID in \${FS_SNAP_LIST[@]}; do
+    eval SNAP\${ID}_PATH="${SNAP_DIR}/\${ID}"
+    eval SNAP\${ID}_PATH_SHORT="${SNAP_DIR_SHORT}/\${ID}"
+    eval SNAP\${ID}_INFO_JSON='\$(qemu-img info --output=json \${SNAP'\${ID}'_PATH})'
+    if [ -z "\$(eval echo \\\$SNAP\${ID}_INFO_JSON)" ]; then
+         eval log '"Error deleting snapshot: Command execution failed: \\\"qemu-img info --output=json \${SNAP'\${ID}'_PATH}\\\""'
          exit 1
     fi
 
-    eval SNAP${ID}_PARENT_PATH='$(echo "$SNAP'${ID}'_INFO_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['\''full-backing-filename'\''])")'
-    if [[ -z "$(eval echo \$SNAP${ID}_PARENT_PATH)" ]]; then
-        eval SNAP${ID}_PARENT_PATH='$(echo "$SNAP'${ID}'_INFO_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['\''backing-filename'\''])")'
+    eval SNAP\${ID}_PARENT_PATH='\$(echo "\$SNAP'\${ID}'_INFO_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['\\\''full-backing-filename'\\\''])")'
+    if [[ -z "\$(eval echo \\\$SNAP\${ID}_PARENT_PATH)" ]]; then
+        eval SNAP\${ID}_PARENT_PATH='\$(echo "\$SNAP'\${ID}'_INFO_JSON" | python -c "import sys, json; print(json.load(sys.stdin)['\\\''backing-filename'\\\''])")'
     fi
 
-    eval echo SNAP${ID}_PARENT_PATH=\$SNAP${ID}_PARENT_PATH >> /tmp/123
+    eval echo SNAP\${ID}_PARENT_PATH=\\\$SNAP\${ID}_PARENT_PATH >> /tmp/123
 
-    eval SNAP${ID}_PARENT_PATH_SHORT='$(echo ${SNAP'${ID}'_PARENT_PATH} | awk -F "'${SYSTEM_DS_DISK_PATH_SHORT}'" '\''{print "'${SYSTEM_DS_DISK_PATH_SHORT}'" $NF}'\'')'
+    eval SNAP\${ID}_PARENT_PATH_SHORT='\$(echo \${SNAP'\${ID}'_PARENT_PATH} | awk -F "'\${SYSTEM_DS_DISK_PATH_SHORT}'" '\\\''{print "'\${SYSTEM_DS_DISK_PATH_SHORT}'" \$NF}'\\\'')'
 
     # Get snapshot parent from image file
-    eval SNAP${ID}_PARENT='$(basename $SNAP'${ID}'_PARENT_PATH)'
+    eval SNAP\${ID}_PARENT='\$(basename \$SNAP'\${ID}'_PARENT_PATH)'
 
     # Get snapshot childrens from image file
-    eval PARENT="\${SNAP${ID}_PARENT}"
-    eval SNAP${PARENT}_CHILDREN+=\" ${ID}\"
+    eval PARENT="\\\${SNAP\${ID}_PARENT}"
+    eval SNAP\${PARENT}_CHILDREN+=\\\" \${ID}\\\"
 done
 
 if [[ -z "${NEW_SNAP_LIST[@]}" ]]; then
     NEW_ACTIVE_SNAP_ID="0"
-    eval NEW_ACTIVE_SNAP_PATH_SHORT="\$SNAP${NEW_ACTIVE_SNAP_ID}_PATH_SHORT"
+    eval NEW_ACTIVE_SNAP_PATH_SHORT="\\\$SNAP\${NEW_ACTIVE_SNAP_ID}_PATH_SHORT"
 fi
+
 
 #-------------------------------------------------------------------------------
 # Creating lists
 #-------------------------------------------------------------------------------
 
 
-for ID in ${FS_SNAP_LIST[@]}; do
+for ID in \${FS_SNAP_LIST[@]}; do
 
     # get parameters
-    eval CHILDREN_SNAP_LIST=("\${SNAP${ID}_CHILDREN}")
-    CHILDREN_SNAP_LIST_NUM="${#CHILDREN_SNAP_LIST[@]}"
+    eval CHILDREN_SNAP_LIST=("\\\${SNAP\${ID}_CHILDREN}")
+    CHILDREN_SNAP_LIST_NUM="\${#CHILDREN_SNAP_LIST[@]}"
 
-    if [[ "$CHILDREN_SNAP_LIST_NUM" == "1" ]]; then                   # if children_snaps_number = 1
+    if [[ "\$CHILDREN_SNAP_LIST_NUM" == "1" ]]; then                   # if children_snaps_number = 1
 
-        CHILDREN_SNAP_ID=(${CHILDREN_SNAP_LIST[@]})
-        eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
+        CHILDREN_SNAP_ID=(\${CHILDREN_SNAP_LIST[@]})
+        eval CHILDREN_CHILDREN_LIST=("\\\$SNAP\${CHILDREN_SNAP_ID}_CHILDREN")
 
         #-------------------------------------------------------------------------------
         # user operation:   snapshot "2" or "3" is removed right now
@@ -164,11 +169,11 @@ for ID in ${FS_SNAP_LIST[@]}; do
         if
 
              [[ ! -z "${NEW_SNAP_LIST[@]}" ]] &&                             # if new_snap_list is not empty, and
-             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${ID} " ]] &&                 # if snap is not in the new_snap_list, and
-             [[ "${CHILDREN_SNAP_ID}" != "${ACTIVE_SNAP_ID}" ]] &&           # if children_snap is not active_snap, and
-             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]]      # if children_snap is not in the new_snap_list
+             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " \${ID} " ]] &&                 # if snap is not in the new_snap_list, and
+             [[ "\${CHILDREN_SNAP_ID}" != "\${ACTIVE_SNAP_ID}" ]] &&           # if children_snap is not active_snap, and
+             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " \${CHILDREN_SNAP_ID} " ]]      # if children_snap is not in the new_snap_list
         then
-             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                        # add children snapshot to commit
+             SNAP_COMMIT_LIST+=" \${CHILDREN_SNAP_ID}"                        # add children snapshot to commit
         fi
 
         #-------------------------------------------------------------------------------
@@ -181,9 +186,9 @@ for ID in ${FS_SNAP_LIST[@]}; do
         #-------------------------------------------------------------------------------
         if
              [[ -z "${NEW_SNAP_LIST[@]}" ]] &&                                # if new_snap_list is empty, and
-             [[ ! -z "${CHILDREN_SNAP_ID}" ]]                                 # children_snap is exist
+             [[ ! -z "\${CHILDREN_SNAP_ID}" ]]                                 # children_snap is exist
         then
-             SNAP_COMMIT_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
+             SNAP_COMMIT_LIST+=" \${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
         fi
 
         #-------------------------------------------------------------------------------
@@ -198,14 +203,14 @@ for ID in ${FS_SNAP_LIST[@]}; do
         #-------------------------------------------------------------------------------
         if
              [[ ! -z "${NEW_SNAP_LIST[@]}" ]] &&                              # if new_snap_list is not empty, and
-             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
-             [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
-             [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
+             [[ ! " ${NEW_SNAP_LIST[@]} " =~ " \${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
+             [ -z "\${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
+             [[ "\${CHILDREN_SNAP_ID}" != "\$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
         then
-             SNAP_DELETE_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
+             SNAP_DELETE_LIST+=" \${CHILDREN_SNAP_ID}"                         # add children snapshot to commit
         fi
 
-    elif [[ "$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then                    # if children_snaps_number > 1
+    elif [[ "\$CHILDREN_SNAP_LIST_NUM" -gt "1" ]]; then                    # if children_snaps_number > 1
 
         #-------------------------------------------------------------------------------
         # user operation:   snapshot "2" is removed right now
@@ -217,15 +222,15 @@ for ID in ${FS_SNAP_LIST[@]}; do
         #
         # result:           snapshot 2 will be removed from the filesystem
         #-------------------------------------------------------------------------------
-        for CHILDREN_SNAP_ID in ${CHILDREN_SNAP_LIST[@]}; do
-            eval CHILDREN_CHILDREN_LIST=("\$SNAP${CHILDREN_SNAP_ID}_CHILDREN")
+        for CHILDREN_SNAP_ID in \${CHILDREN_SNAP_LIST[@]}; do
+            eval CHILDREN_CHILDREN_LIST=("\\\$SNAP\${CHILDREN_SNAP_ID}_CHILDREN")
             if
                 [[ ! -z "${NEW_SNAP_LIST[@]}" ]] &&                              # if new_snap_list is not empty, and
-                [[ ! " ${NEW_SNAP_LIST[@]} " =~ " ${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
-                [ -z "${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
-                [[ "${CHILDREN_SNAP_ID}" != "$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
+                [[ ! " ${NEW_SNAP_LIST[@]} " =~ " \${CHILDREN_SNAP_ID} " ]] &&    # if children_snap is not in the new_snap_list, and
+                [ -z "\${CHILDREN_CHILDREN_LIST[@]}" ] &&                         # if children_snap have no childrens, and
+                [[ "\${CHILDREN_SNAP_ID}" != "\$ACTIVE_SNAP_ID" ]]                 # if children_snap is not active_snap
             then
-                SNAP_DELETE_LIST+=" ${CHILDREN_SNAP_ID}"                         # add children snapshot to delete
+                SNAP_DELETE_LIST+=" \${CHILDREN_SNAP_ID}"                         # add children snapshot to delete
             fi
         done
 
@@ -234,22 +239,24 @@ for ID in ${FS_SNAP_LIST[@]}; do
 done
 
 # Sort lists from end to beginning
-SNAP_COMMIT_LIST=($(echo ${SNAP_COMMIT_LIST[@]} | tr " " "\n" | sort -ur ))
-SNAP_DELETE_LIST=($(echo ${SNAP_DELETE_LIST[@]} | tr " " "\n" | sort -ur ))
+SNAP_COMMIT_LIST=(\$(echo \${SNAP_COMMIT_LIST[@]} | tr " " "\n" | sort -ur ))
+SNAP_DELETE_LIST=(\$(echo \${SNAP_DELETE_LIST[@]} | tr " " "\n" | sort -ur ))
+
+EOT
+)
 
 #-------------------------------------------------------------------------------
 # Online commit operaion
 #-------------------------------------------------------------------------------
 
-ONLINE_COMMIT_CMD+='set -ex -o pipefail; '
+ONLINE_COMMIT_CMD=$(cat <<EOT
 
-for ID in ${SNAP_COMMIT_LIST[@]}; do
-eval SNAP_PATH="\$SNAP${ID}_PATH"
-eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
-eval SNAP_PARENT_PATH="\$SNAP${ID}_PARENT_PATH"
-eval SNAP_PARENT_PATH_SHORT="\$SNAP${ID}_PARENT_PATH_SHORT"
+for ID in \${SNAP_COMMIT_LIST[@]}; do
 
-ONLINE_COMMIT_CMD+=$(cat <<EOT
+    eval SNAP_PATH="\\\$SNAP\${ID}_PATH"
+    eval SNAP_PATH_SHORT="\\\$SNAP\${ID}_PATH_SHORT"
+    eval SNAP_PARENT_PATH="\\\$SNAP\${ID}_PARENT_PATH"
+    eval SNAP_PARENT_PATH_SHORT="\\\$SNAP\${ID}_PARENT_PATH_SHORT"
 
     # Correct SNAP_PATH
     SNAP_PATH=\$(virsh dumpxml $DOMAIN | xmlstarlet sel -t -v "//*/source/@file" | grep "$SNAP_PATH_SHORT\$")
@@ -264,102 +271,93 @@ ONLINE_COMMIT_CMD+=$(cat <<EOT
         rm -f \${SNAP_PATH} || exit 2
     fi
     
-EOT
-)
 done
 
-if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
-    ONLINE_COMMIT_CMD+="ln -sf '${NEW_ACTIVE_SNAP_PATH_SHORT}' '${SYSTEM_DS_DISK_PATH}'; "
-fi
+ln -sf '\${NEW_ACTIVE_SNAP_PATH_SHORT}' '\${SYSTEM_DS_DISK_PATH}';
+
+EOT
+)
 
 #-------------------------------------------------------------------------------
 # Offline commit operation
 #-------------------------------------------------------------------------------
 
-OFFLINE_COMMIT_CMD+='set -ex -o pipefail; '
+OFFLINE_COMMIT_CMD=$(cat <<EOT
 
-for ID in ${SNAP_COMMIT_LIST[@]}; do
+for ID in \${SNAP_COMMIT_LIST[@]}; do
 
-eval SNAP_PATH="\$SNAP${ID}_PATH"
-eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
-eval SNAP_CHILDREN=("\${SNAP${ID}_CHILDREN}")
-eval SNAP_CHILDREN_PATH="\$SNAP${SNAP_CHILDREN}_PATH"
+    eval SNAP_PATH="\\\$SNAP\${ID}_PATH"
+    eval SNAP_PATH_SHORT="\\\$SNAP\${ID}_PATH_SHORT"
+    eval SNAP_CHILDREN=("\\\${SNAP\${ID}_CHILDREN}")
+    eval SNAP_CHILDREN_PATH="\\\$SNAP\${SNAP_CHILDREN}_PATH"
 
-OFFLINE_COMMIT_CMD+=$(cat <<EOT
     
-    qemu-img commit "${SNAP_PATH}" &&
-    rm ${SNAP_PATH}
+    qemu-img commit "\${SNAP_PATH}" &&
+    rm \${SNAP_PATH}
     
-EOT
-)
+    if [[ ! -z "\${SNAP_CHILDREN}" ]] && [[ ! " \${SNAP_COMMIT_LIST[@]} " =~ " \${SNAP_CHILDREN} " ]] ; then
+    
+        eval NEW_SNAP_PARENT="\\\$SNAP\${ID}_PARENT"
+        while [[ " \${SNAP_COMMIT_LIST[@]} " =~ " \${NEW_SNAP_PARENT} " ]]; do
+    	eval NEW_SNAP_PARENT="\\\$SNAP\${NEW_SNAP_PARENT}_PARENT"
+        done
+        eval NEW_SNAP_PARENT_PATH="\\\$SNAP\${NEW_SNAP_PARENT}_PATH"
+    
+        OFFLINE_COMMIT_CMD+="qemu-img rebase -u -b '\${NEW_SNAP_PARENT_PATH}' '\${SNAP_CHILDREN_PATH}'; "
+    fi
+    
 done
 
-if [[ ! -z "${SNAP_CHILDREN}" ]] && [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " ${SNAP_CHILDREN} " ]] ; then
+ln -sf '\${NEW_ACTIVE_SNAP_PATH_SHORT}' '\${SYSTEM_DS_DISK_PATH}';
 
-    eval NEW_SNAP_PARENT="\$SNAP${ID}_PARENT"
-    while [[ " ${SNAP_COMMIT_LIST[@]} " =~ " ${NEW_SNAP_PARENT} " ]]; do
-	eval NEW_SNAP_PARENT="\$SNAP${NEW_SNAP_PARENT}_PARENT"
-    done
-    eval NEW_SNAP_PARENT_PATH="\$SNAP${NEW_SNAP_PARENT}_PATH"
+EOT
+)
 
-    OFFLINE_COMMIT_CMD+="qemu-img rebase -u -b '${NEW_SNAP_PARENT_PATH}' '${SNAP_CHILDREN_PATH}'; "
-fi
 
-if [ ! -z "$NEW_ACTIVE_SNAP_PATH_SHORT" ]; then
-    OFFLINE_COMMIT_CMD+="ln -sf '${NEW_ACTIVE_SNAP_PATH_SHORT}' '${SYSTEM_DS_DISK_PATH}'; "
-fi
 
 #-------------------------------------------------------------------------------
 # Delete operation
 #-------------------------------------------------------------------------------
 
-DELETE_CMD+='set -ex -o pipefail; '
+DELETE_CMD=$(cat <<EOT
 
-for ID in ${SNAP_DELETE_LIST[@]}; do
-
-    eval SNAP_PATH="\$SNAP${ID}_PATH"
-    eval SNAP_PATH_SHORT="\$SNAP${ID}_PATH_SHORT"
-    DELETE_CMD+="rm ${SNAP_PATH}; "
-
+for ID in \${SNAP_DELETE_LIST[@]}; do
+    eval SNAP_PATH="\\\$SNAP\${ID}_PATH"
+    eval SNAP_PATH_SHORT="\\\$SNAP\${ID}_PATH_SHORT"
+    rm \${SNAP_PATH}
 done
 
+EOT
+)
 
 
 #-------------------------------------------------------------------------------
 # Send commands
 #-------------------------------------------------------------------------------
 
-echo "SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )" >> /tmp/123
+case "$LCM_STATE" in
+59 )    ssh_exec_and_log "${SRC_HOST}" "${COMMON_COMMIT_CMD}; ${ONLINE_COMMIT_CMD}; ${DELETE_CMD}" \
+	        "Error deleting snapshot: Online commit operation failed."
+;;
+53|56 ) ssh_exec_and_log "${SRC_HOST}" "${COMMON_COMMIT_CMD}; ${OFFLINE_COMMIT_CMD}; ${DELETE_CMD}" \
+            "Error deleting snapshot: Offline commit operation failed." 
+;;
+* )     log "Error deleting snapshot: Wrong STATE for commit operation!"
+        exit 1
+;;
+esac
 
-if [[ "${#SNAP_COMMIT_LIST[@]}" -gt "0" ]]; then
-    case "$LCM_STATE" in
-	59 )    ssh_exec_and_log "${SRC_HOST}" "${ONLINE_COMMIT_CMD}" \
-		 "Error deleting snapshot: Online commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
-	;;
-	53|56 ) ssh_exec_and_log "${SRC_HOST}" "${OFFLINE_COMMIT_CMD}" \
-		"Error deleting snapshot: Offline commit operation failed. SNAP_COMMIT_LIST=( ${SNAP_COMMIT_LIST[@]} )"
-	;;
-	* )     log "Error deleting snapshot: Wrong STATE for commit operation! LCM_STATE=${LCM_STATE}"
-		exit 1
-	;;
-    esac
 
-    for ID in ${SNAP_COMMIT_LIST[@]}; do
-        eval SNAP_CHILDREN=("\${SNAP${ID}_CHILDREN}")
-        if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " $SNAP_CHILDREN " ]]; then 
-            eval SNAP_CHILDREN_PATH="\$SNAP${SNAP_CHILDREN}_PATH"
-            NEW_SNAP_CHILDREN_PARENT="$(basename $(qemu-img info "$SNAP_CHILDREN_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['full-backing-filename'])" ))"
-            if [[ -z "$NEW_SNAP_CHILDREN_PARENT" ]]; then
-                NEW_SNAP_CHILDREN_PARENT="$(basename $(qemu-img info "$SNAP_CHILDREN_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['backing-filename'])" ))"
-            fi
-
-            # Run out of host, to avoid i/o errors
-            qemu-img rebase -u -b "${NEW_SNAP_CHILDREN_PARENT}" "${SNAP_CHILDREN_PATH}"
-        fi
-    done
-fi
-
-if [[ "${#SNAP_DELETE_LIST[@]}" -gt "0" ]]; then
-    ssh_exec_and_log "${SRC_HOST}" "${DELETE_CMD}" \
-                     "Error deleting snapshot: Delete operaion failed. SNAP_DELETE_LIST=( ${SNAP_DELETE_LIST[@]} )"
-fi
+#for ID in ${SNAP_COMMIT_LIST[@]}; do
+#    eval SNAP_CHILDREN=("\${SNAP${ID}_CHILDREN}")
+#    if [[ ! " ${SNAP_COMMIT_LIST[@]} " =~ " $SNAP_CHILDREN " ]]; then 
+#        eval SNAP_CHILDREN_PATH="\$SNAP${SNAP_CHILDREN}_PATH"
+#        NEW_SNAP_CHILDREN_PARENT="$(basename $(qemu-img info "$SNAP_CHILDREN_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['full-backing-filename'])" ))"
+#        if [[ -z "$NEW_SNAP_CHILDREN_PARENT" ]]; then
+#            NEW_SNAP_CHILDREN_PARENT="$(basename $(qemu-img info "$SNAP_CHILDREN_PATH" --output=json |  python -c "import sys, json; print(json.load(sys.stdin)['backing-filename'])" ))"
+#        fi
+#
+#        # Run out of host, to avoid i/o errors
+#        qemu-img rebase -u -b "${NEW_SNAP_CHILDREN_PARENT}" "${SNAP_CHILDREN_PATH}"
+#    fi
+#done
