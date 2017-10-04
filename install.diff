@@ -1,0 +1,35 @@
+diff --git a/oned.conf b/oned.conf
+index 43c6b33..78f7d83 100644
+--- a/oned.conf
++++ b/oned.conf
+@@ -608,7 +608,7 @@ VM_MAD = [
+ 
+ TM_MAD = [
+     EXECUTABLE = "one_tm",
+-    ARGUMENTS = "-t 15 -d dummy,lvm,shared,fs_lvm,qcow2,ssh,ceph,dev,vcenter,iscsi_libvirt"
++    ARGUMENTS = "-t 15 -d dummy,lvm,shared,fs_lvm,qcow2,raw_qcow2,ssh,ceph,dev,vcenter,iscsi_libvirt"
+ ]
+ 
+ #*******************************************************************************
+@@ -1120,6 +1120,11 @@ TM_MAD_CONF = [
+ ]
+ 
+ TM_MAD_CONF = [
++    NAME = "raw_qcow2", LN_TARGET = "NONE", CLONE_TARGET = "SYSTEM", SHARED = "YES",
++    DRIVER = "raw", ALLOW_ORPHANS="yes"
++]
++
++TM_MAD_CONF = [
+     NAME = "ssh", LN_TARGET = "SYSTEM", CLONE_TARGET = "SYSTEM", SHARED = "NO",
+     DS_MIGRATE = "YES"
+ ]
+diff --git a/vmm_exec/vmm_execrc b/vmm_exec/vmm_execrc
+index 8eea88b..b82cd97 100644
+--- a/vmm_exec/vmm_execrc
++++ b/vmm_exec/vmm_execrc
+@@ -16,4 +16,4 @@
+ 
+ # Space separated list of VMM-TM pairs that support live disk snapshots. VMM
+ # and TM must be separated by '-'
+-LIVE_DISK_SNAPSHOTS="kvm-qcow2 kvm-ceph"
++LIVE_DISK_SNAPSHOTS="kvm-qcow2 kvm-ceph kvm-raw_qcow2"
